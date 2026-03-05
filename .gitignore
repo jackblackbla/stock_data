@@ -1,0 +1,28 @@
+# Build outputs
+build/
+cpp/build/
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.exe
+
+# Sensitive / runtime artifacts
+*.dll
+data/reasons.db
+data/json/*.json
+data/output/*.xlsx
+logs/*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+
+# Packaging
+dist/
+*.spec

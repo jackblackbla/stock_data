@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.0",
+  "trade_date": "20260305",
+  "generated_at": "2026-03-05T15:41:00",
+  "account_masked": "******7890",
+  "status": "ok",
+  "errors": [],
+  "executions": [
+    {
+      "order_no": "1",
+      "orig_order_no": "0",
+      "order_type": "현금매수",
+      "stock_code": "005930",
+      "stock_name": "삼성전자",
+      "order_qty": 100,
+      "exec_qty": 100,
+      "order_price": 71500,
+      "exec_avg_price": 71546,
+      "exec_time": "09:31:05",
+      "market_code": "SOR",
+      "sor_split": "Y",
+      "split_details": [
+        {"exec_qty": 37, "exec_amount": 2645500, "exec_price": 71500, "exec_time": "09:31:02", "market": "KRX"},
+        {"exec_qty": 7, "exec_amount": 501200, "exec_price": 71600, "exec_time": "09:31:02", "market": "NXT"},
+        {"exec_qty": 56, "exec_amount": 4006800, "exec_price": 71550, "exec_time": "09:31:05", "market": "KRX"}
+      ]
+    },
+    {
+      "order_no": "2",
+      "orig_order_no": "0",
+      "order_type": "현금매도",
+      "stock_code": "000660",
+      "stock_name": "SK하이닉스",
+      "order_qty": 50,
+      "exec_qty": 50,
+      "order_price": 82300,
+      "exec_avg_price": 82300,
+      "exec_time": "10:15:00",
+      "market_code": "KRX",
+      "sor_split": "N",
+      "split_details": []
+    }
+  ]
+}
