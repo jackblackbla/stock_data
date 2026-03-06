@@ -5,6 +5,8 @@
 cpp/fetch
 build/
 cpp/build/
+cpp/logs/
+cpp/output/
 *.obj
 *.pdb
 *.ilk
@@ -29,4 +31,5 @@ venv/
 
 # Packaging
 dist/
+deliverables/
 *.spec

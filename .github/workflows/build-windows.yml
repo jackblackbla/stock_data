@@ -13,9 +13,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build fetch.exe (C++)
+      - name: Build fetch.exe (C++, x86)
         run: |
-          cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release
+          cmake -S cpp -B cpp/build -A Win32 -DCMAKE_BUILD_TYPE=Release
           cmake --build cpp/build --config Release
 
       - name: Set up Python 3.11 (x86)
