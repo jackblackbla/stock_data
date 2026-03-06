@@ -19,6 +19,7 @@ pyinstaller ^
   --clean ^
   --onedir ^
   --windowed ^
+  --hidden-import tzdata ^
   --name nh-trade-logger ^
   --distpath %DIST_ROOT% ^
   --workpath build\pyinstaller ^
