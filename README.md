@@ -1,6 +1,6 @@
 # NH Trade Logger
 
-NH투자증권 QV Open API 체결 데이터를 조회(s8180, 조건부 s8118)하고, 매매 근거를 입력해 엑셀로 내보내는 Windows 데스크톱 도구입니다.
+NH투자증권 QV Open API 체결 데이터를 조회하고, 매매 근거를 입력해 엑셀로 내보내는 Windows 데스크톱 도구입니다.
 
 ## 지원 범위
 - OS: Windows 10+
@@ -39,6 +39,30 @@ CLI:
 - `20`: 로그인 실패
 - `30`: TR 조회 실패
 - `40`: JSON 저장 실패
+
+## QV 로그인 환경변수
+`fetch.exe`는 `wmcaConnect`를 통해 로그인합니다.
+
+- `QV_ID`: 로그인 ID
+- `QV_PASSWORD`: 계좌 비밀번호
+- `QV_CERT_PASSWORD`: 인증서 비밀번호
+- `QV_ACCOUNT_INDEX` (기본 `1`): 조회 계좌 인덱스
+- `QV_DLL_PATH` (선택): `wmca.dll` 절대경로
+
+환경변수가 비어 있으면 Windows 로그인 다이얼로그를 띄웁니다.
+다이얼로그를 사용할 수 없는 경우에만 콘솔 입력으로 fallback 합니다.
+
+## TR 설정 환경변수
+- `QV_EXEC_TR_CODE` (기본 `s8180`): 체결 조회 TR 코드
+- `QV_SPLIT_TR_CODE` (기본 `s8118`): 분할체결 상세 TR 코드
+- `QV_QUERY_TIMEOUT_MS` (기본 `15000`)
+- `QV_TRADE_PASSWORD1`, `QV_TRADE_PASSWORD2` (선택): TR 입력 거래비밀번호
+- `QV_ACCOUNT_PASSWORD` (선택): s8180 입력 비밀번호
+
+기본 구현은 문서 기준 `s8180` 체결조회 + `s8118` 분할체결 상세 구조체 파서를 사용합니다.
+
+s8180 페이징은 `CTS + ISPAGEUP(\"N\")` 로직을 사용합니다.
+`SOR시장분할여부 == Y`인 주문에 대해 s8118을 호출하고, 체결단가는 `체결금액 / 체결수량`으로 역산합니다.
 
 ## Python 실행
 1. x86 Python 3 설치

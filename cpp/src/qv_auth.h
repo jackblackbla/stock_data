@@ -1,9 +1,15 @@
 #ifndef QV_AUTH_H
 #define QV_AUTH_H
 
+#include <cstdint>
 #include <string>
 
 #include "logger.h"
+
+struct QVEvent {
+    std::uint32_t code = 0;
+    std::intptr_t lparam = 0;
+};
 
 class QVAuth {
 public:
@@ -12,16 +18,41 @@ public:
 
     bool load_dll();
     bool login();
+    bool submit_query(int tr_index,
+                      const std::string& tr_code,
+                      const void* input,
+                      int input_size) const;
+    bool wait_for_event(QVEvent& event, int timeout_ms, std::string& error_message) const;
+
     std::string masked_account() const;
+    int account_index() const;
     bool is_mock_mode() const;
 
 private:
     Logger& logger_;
     std::string account_no_;
+    int account_index_ = 1;
     bool mock_mode_ = false;
 
 #ifdef _WIN32
+    using WmcaLoad = int(__stdcall*)();
+    using WmcaFree = int(__stdcall*)();
+    using WmcaConnect = int(__stdcall*)(void*, unsigned long, char, char, const char*, const char*, const char*);
+    using WmcaDisconnect = int(__stdcall*)();
+    using WmcaQuery = int(__stdcall*)(void*, int, const char*, const char*, int, int);
+
     void* dll_handle_ = nullptr;
+    void* hwnd_ = nullptr;
+    WmcaLoad wmca_load_ = nullptr;
+    WmcaFree wmca_free_ = nullptr;
+    WmcaConnect wmca_connect_ = nullptr;
+    WmcaDisconnect wmca_disconnect_ = nullptr;
+    WmcaQuery wmca_query_ = nullptr;
+
+    bool create_message_window();
+    void destroy_message_window();
+    bool resolve_symbols();
+    bool wait_for_connected(int timeout_ms, std::string& error_message);
 #endif
 };
 
