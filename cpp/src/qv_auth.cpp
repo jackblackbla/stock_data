@@ -364,7 +364,18 @@ std::string cstr_cp949(const char* cstr) {
     return trim(cp949_to_utf8(cstr, static_cast<int>(std::strlen(cstr))));
 }
 
+struct QVEventEntry {
+    std::uint32_t code;
+    std::intptr_t lparam;
+};
+
+std::vector<QVEventEntry> g_event_queue;
+
 LRESULT CALLBACK qv_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+    if (msg == WM_WMCAEVENT) {
+        g_event_queue.push_back({static_cast<std::uint32_t>(wparam), static_cast<std::intptr_t>(lparam)});
+        return 0;
+    }
     return DefWindowProcA(hwnd, msg, wparam, lparam);
 }
 #endif
@@ -557,17 +568,20 @@ bool QVAuth::wait_for_event(QVEvent& event, int timeout_ms, std::string& error_m
     const auto start = std::chrono::steady_clock::now();
 
     while (true) {
+        // Pump messages so SendMessage-based events reach qv_wnd_proc
         MSG msg{};
-        bool had_message = false;
         while (PeekMessageA(&msg, nullptr, 0, 0, PM_REMOVE) != 0) {
-            had_message = true;
-            if (msg.message == WM_WMCAEVENT) {
-                event.code = static_cast<std::uint32_t>(msg.wParam);
-                event.lparam = msg.lParam;
-                return true;
-            }
             TranslateMessage(&msg);
             DispatchMessageA(&msg);
+        }
+
+        // Check events captured by qv_wnd_proc
+        if (!g_event_queue.empty()) {
+            const auto& entry = g_event_queue.front();
+            event.code = entry.code;
+            event.lparam = entry.lparam;
+            g_event_queue.erase(g_event_queue.begin());
+            return true;
         }
 
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -579,9 +593,7 @@ bool QVAuth::wait_for_event(QVEvent& event, int timeout_ms, std::string& error_m
             return false;
         }
 
-        if (!had_message) {
-            Sleep(10);
-        }
+        Sleep(10);
     }
 #else
     (void)event;
