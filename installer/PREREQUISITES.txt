@@ -1,0 +1,16 @@
+NH 매매일지 자동화 설치 전 확인
+
+1. 이 프로그램은 Windows 10 이상에서만 지원합니다.
+2. NH QV Open API가 먼저 설치되어 있어야 합니다.
+3. QV 인증서가 이 PC에 설치되어 있어야 합니다.
+4. wmca.dll은 NH 설치물에 포함되며, 본 설치 프로그램에는 포함되지 않습니다.
+
+설치 후 사용 방법
+1. 바탕화면 또는 시작 메뉴의 "NH 매매일지 자동화"를 실행합니다.
+2. 로그인 창이 뜨면 QV ID, 계좌 비밀번호, 인증서 비밀번호를 입력합니다.
+3. 조회 후 매매 근거를 입력하고 엑셀을 생성합니다.
+
+저장 위치
+- 사용자 데이터: %LOCALAPPDATA%\NHTradeLogger\data
+- 엑셀 출력: %LOCALAPPDATA%\NHTradeLogger\data\output
+- 로그: %LOCALAPPDATA%\NHTradeLogger\logs

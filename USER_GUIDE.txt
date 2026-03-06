@@ -1,0 +1,34 @@
+NH Trade Logger 사용자 안내
+
+1. 설치 전 준비
+- Windows 10 이상
+- NH QV Open API 설치
+- QV 인증서 설치
+- wmca.dll 사용 가능 상태
+
+2. 설치 방법
+- 설치 파일을 실행합니다.
+- 기본값 그대로 설치해도 됩니다.
+- 설치가 끝나면 바탕화면 또는 시작 메뉴에 "NH 매매일지 자동화"가 생깁니다.
+
+3. 실행 방법
+- 바탕화면 또는 시작 메뉴의 "NH 매매일지 자동화"를 실행합니다.
+- 로그인 창이 뜨면 QV ID, 계좌 비밀번호, 인증서 비밀번호를 입력합니다.
+- 조회가 끝나면 화면의 근거 칸을 더블클릭해서 매매 근거를 입력합니다.
+- 엑셀 생성 버튼을 누르면 `%LOCALAPPDATA%\\NHTradeLogger\\data\\output` 폴더에 파일이 저장됩니다.
+
+4. 설치 폴더 안의 주요 파일
+- nh-trade-logger.exe: 메인 프로그램
+- fetch.exe: NH QV 조회 모듈
+- USER_GUIDE.txt: 사용자 안내문
+
+5. 저장 위치
+- 사용자 데이터: `%LOCALAPPDATA%\\NHTradeLogger\\data`
+- JSON: `%LOCALAPPDATA%\\NHTradeLogger\\data\\json`
+- 엑셀: `%LOCALAPPDATA%\\NHTradeLogger\\data\\output`
+- 로그: `%LOCALAPPDATA%\\NHTradeLogger\\logs`
+
+6. 주의
+- 인증서 비밀번호는 프로그램이 디스크에 저장하지 않습니다.
+- 자동 실행(Task Scheduler)로 돌릴 때는 로그인 창이 뜨지 않을 수 있습니다.
+- 실행이 안 되면 NH QV Open API 설치 여부와 wmca.dll 경로를 먼저 확인합니다.

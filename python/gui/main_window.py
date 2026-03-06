@@ -5,7 +5,7 @@ import platform
 import subprocess
 from pathlib import Path
 
-from PyQt5.QtCore import QDate
+from PyQt5.QtCore import QDate, QTimer
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QDateEdit,
@@ -24,17 +24,25 @@ from core.excel_generator import generate_excel
 from core.fetch_service import FetchError, FetchService
 from core.models import TradeRecord
 from core.reason_store import ReasonStore
+from core.runtime_paths import AppPaths
 from gui.reason_delegate import ReasonDelegate
 from gui.trade_tree_model import TradeTreeModel
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, repo_root: Path, initial_date: str | None = None, initial_json: Path | None = None) -> None:
+    def __init__(
+        self,
+        paths: AppPaths,
+        initial_date: str | None = None,
+        initial_json: Path | None = None,
+        startup_warnings: list[str] | None = None,
+    ) -> None:
         super().__init__()
-        self.repo_root = repo_root
-        self.fetch_service = FetchService(repo_root)
-        self.reason_store = ReasonStore(repo_root / "data" / "reasons.db")
+        self.paths = paths
+        self.fetch_service = FetchService(paths.app_root, paths)
+        self.reason_store = ReasonStore(paths.db_path)
         self.last_excel_path: Path | None = None
+        self.startup_warnings = startup_warnings or []
 
         self.setWindowTitle("NH 매매일지 자동화")
         self.resize(1100, 720)
@@ -88,6 +96,8 @@ class MainWindow(QMainWindow):
 
         if initial_json:
             self.load_from_json(initial_json)
+        if self.startup_warnings:
+            QTimer.singleShot(0, self.show_startup_warnings)
 
     def current_trade_date(self) -> str:
         return self.date_edit.date().toString("yyyy-MM-dd")
@@ -96,7 +106,7 @@ class MainWindow(QMainWindow):
         return self.current_trade_date().replace("-", "")
 
     def current_json_path(self) -> Path:
-        return self.repo_root / "data" / "json" / f"{self.current_trade_date_compact()}.json"
+        return self.paths.json_dir / f"{self.current_trade_date_compact()}.json"
 
     def on_fetch_clicked(self) -> None:
         try:
@@ -132,15 +142,14 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "안내", "내보낼 데이터가 없습니다.")
             return
 
-        output_dir = self.repo_root / "data" / "output"
-        output = generate_excel(trades, self.current_trade_date(), output_dir)
+        output = generate_excel(trades, self.current_trade_date(), self.paths.output_dir)
         self.last_excel_path = output
         QMessageBox.information(self, "완료", f"엑셀 생성 완료\n{output}")
 
     def on_open_clicked(self) -> None:
         target = self.last_excel_path
         if target is None:
-            candidate = self.repo_root / "data" / "output" / f"매매일지_{self.current_trade_date()}.xlsx"
+            candidate = self.paths.output_dir / f"매매일지_{self.current_trade_date()}.xlsx"
             target = candidate if candidate.exists() else None
 
         if target is None or not target.exists():
@@ -172,6 +181,10 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"매수 {buy_count}건 / 매도 {sell_count}건 / 총 체결금액: ₩{total_amount:,} / 근거 미입력 {missing}건"
         )
+
+    def show_startup_warnings(self) -> None:
+        message = "\n\n".join(self.startup_warnings)
+        QMessageBox.warning(self, "실행 전 확인", message)
 
     @staticmethod
     def _open_file(path: Path) -> None:

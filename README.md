@@ -5,13 +5,14 @@ NH투자증권 QV Open API 체결 데이터를 조회하고, 매매 근거를 �
 ## 지원 범위
 - OS: Windows 10+
 - 운영 형태: 단일 사용자 / 단일 PC
-- 배포 형태: x86 onedir
+- 배포 형태: x86 onedir + Inno Setup 설치 프로그램
 
 ## 디렉토리
 - `cpp/`: `fetch.exe` (QV DLL 연동, JSON 출력)
 - `python/`: GUI/SQLite/엑셀
 - `data/`: runtime DB/JSON/엑셀
 - `scripts/`: 실행/스케줄/패키징 배치
+- `installer/`: Inno Setup 설치 스크립트
 
 ## JSON 계약
 `fetch.exe` 출력 루트 필드:
@@ -83,11 +84,43 @@ s8180 페이징은 `CTS + ISPAGEUP(\"N\")` 로직을 사용합니다.
 - `scripts/run.bat`: fetch 후 GUI 실행
 - `scripts/schedule_setup.bat`: 15:40 스케줄 작업 등록
 - `scripts/build_pyinstaller.bat`: onedir 패키징
+- `scripts/build_installer.bat`: Inno Setup 설치 프로그램 생성
+- `scripts/build_release.bat`: PyInstaller + Inno Setup 일괄 빌드
+- `scripts/launch_trade_logger.bat`: 배포본 실행용 배치
+
+## 설치형 배포
+1. `scripts/build_pyinstaller.bat`
+2. `scripts/build_installer.bat`
+
+또는 한 번에:
+- `scripts/build_release.bat`
+
+설치 프로그램 산출물:
+- `dist/installer/nh-trade-logger-setup-<version>.exe`
+
+설치 경로 기본값:
+- `%LOCALAPPDATA%\Programs\NHTradeLogger`
+
+사용자 데이터 저장 위치:
+- `%LOCALAPPDATA%\NHTradeLogger\data`
+- `%LOCALAPPDATA%\NHTradeLogger\data\output`
+- `%LOCALAPPDATA%\NHTradeLogger\logs`
+
+## 배포본 전달 방식
+최종 사용자에게는 `dist/installer/` 아래 생성된 설치 프로그램 `.exe` 하나를 전달합니다.
+
+전달 폴더에는 다음이 포함됩니다.
+- `nh-trade-logger.exe`
+- `fetch.exe`
+- `launch_trade_logger.bat`
+- `USER_GUIDE.txt`
+- 설치 후 데이터는 `%LOCALAPPDATA%\NHTradeLogger` 아래에 생성됨
 
 ## 보안/운영 주의
 - `wmca.dll`은 NH 자산이므로 재배포 금지
 - 인증서 비밀번호는 디스크 저장 금지
 - 로그 기본 보존기간 30일
+- 설치 프로그램은 NH QV Open API를 포함하지 않음
 
 ## 테스트
 - 단위/계약 테스트: `python/tests/`

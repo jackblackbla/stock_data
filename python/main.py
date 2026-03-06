@@ -14,6 +14,8 @@ from core.fetch_service import FetchError, FetchService
 from core.log_cleanup import cleanup_old_logs
 from core.notification import show_notification
 from core.reason_store import ReasonStore
+from core.startup_checks import collect_startup_warnings
+from core.runtime_paths import ensure_runtime_dirs, get_app_paths
 from gui.main_window import MainWindow
 
 KST = ZoneInfo("Asia/Seoul")
@@ -35,9 +37,11 @@ def iso_to_compact(iso_date: str) -> str:
     return iso_date.replace("-", "")
 
 
-def run_auto(repo_root: Path, iso_date: str, json_path_arg: str | None) -> int:
-    fetch_service = FetchService(repo_root)
-    reason_store = ReasonStore(repo_root / "data" / "reasons.db")
+def run_auto(app_root: Path, iso_date: str, json_path_arg: str | None) -> int:
+    paths = get_app_paths()
+    ensure_runtime_dirs(paths)
+    fetch_service = FetchService(app_root, paths)
+    reason_store = ReasonStore(paths.db_path)
 
     try:
         if json_path_arg:
@@ -60,7 +64,7 @@ def run_auto(repo_root: Path, iso_date: str, json_path_arg: str | None) -> int:
             print(f"missing reasons: {len(missing)}")
             return 0
 
-        output = generate_excel(trades, iso_date, repo_root / "data" / "output")
+        output = generate_excel(trades, iso_date, paths.output_dir)
         print(f"excel generated: {output}")
         return 0
     except FetchError as exc:
@@ -81,16 +85,23 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    repo_root = Path(__file__).resolve().parent.parent
-    cleanup_old_logs(repo_root / "logs", retention_days=30)
+    paths = get_app_paths()
+    ensure_runtime_dirs(paths)
+    cleanup_old_logs(paths.logs_dir, retention_days=30)
     iso_date = normalize_iso_date(args.date)
 
     if args.auto:
-        return run_auto(repo_root, iso_date, args.json)
+        return run_auto(paths.app_root, iso_date, args.json)
 
     app = QApplication(sys.argv)
     initial_json = Path(args.json) if args.json else None
-    window = MainWindow(repo_root=repo_root, initial_date=iso_date, initial_json=initial_json)
+    startup_warnings = collect_startup_warnings(paths)
+    window = MainWindow(
+        paths=paths,
+        initial_date=iso_date,
+        initial_json=initial_json,
+        startup_warnings=startup_warnings,
+    )
     window.show()
     return app.exec_()
 

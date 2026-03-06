@@ -4,6 +4,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.runtime_paths import AppPaths
+
 
 class FetchError(RuntimeError):
     pass
@@ -19,14 +21,17 @@ ERROR_MAP = {
 
 @dataclass
 class FetchService:
-    repo_root: Path
+    app_root: Path
+    paths: AppPaths
 
     @property
     def fetch_exe(self) -> Path:
         candidates = [
-            self.repo_root / "cpp" / "build" / "fetch.exe",
-            self.repo_root / "cpp" / "build" / "Release" / "fetch.exe",
-            self.repo_root / "cpp" / "build" / "RelWithDebInfo" / "fetch.exe",
+            self.app_root / "fetch.exe",
+            self.app_root / "bin" / "fetch.exe",
+            self.app_root / "cpp" / "build" / "fetch.exe",
+            self.app_root / "cpp" / "build" / "Release" / "fetch.exe",
+            self.app_root / "cpp" / "build" / "RelWithDebInfo" / "fetch.exe",
         ]
         for path in candidates:
             if path.exists():
@@ -34,10 +39,10 @@ class FetchService:
         return candidates[0]
 
     def default_json_path(self, date_compact: str) -> Path:
-        return self.repo_root / "data" / "json" / f"{date_compact}.json"
+        return self.paths.json_dir / f"{date_compact}.json"
 
     def default_log_path(self, date_compact: str) -> Path:
-        return self.repo_root / "logs" / f"fetch_{date_compact}.log"
+        return self.paths.logs_dir / f"fetch_{date_compact}.log"
 
     def run(self, date_compact: str, output_path: Path | None = None) -> Path:
         output = output_path or self.default_json_path(date_compact)
@@ -58,7 +63,7 @@ class FetchService:
             str(log_path),
         ]
 
-        proc = subprocess.run(cmd, cwd=self.repo_root, capture_output=True, text=True)
+        proc = subprocess.run(cmd, cwd=self.app_root, capture_output=True, text=True)
         if proc.returncode != 0:
             reason = ERROR_MAP.get(proc.returncode, f"알 수 없는 오류({proc.returncode})")
             detail = (proc.stderr or proc.stdout).strip()

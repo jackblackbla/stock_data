@@ -1,0 +1,85 @@
+name: Build Windows Installer
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build fetch.exe (C++)
+        run: |
+          cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build cpp/build --config Release
+
+      - name: Set up Python 3.11 (x86)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: x86
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r python/requirements.txt
+          pip install pyinstaller
+
+      - name: Package with PyInstaller
+        run: |
+          pyinstaller --noconfirm --clean --onedir --windowed --name nh-trade-logger --distpath dist/x86 --workpath build/pyinstaller python/main.py
+
+      - name: Copy fetch.exe and support files into bundle
+        shell: cmd
+        run: |
+          copy /Y cpp\build\Release\fetch.exe dist\x86\nh-trade-logger\fetch.exe
+          copy /Y scripts\launch_trade_logger.bat dist\x86\nh-trade-logger\launch_trade_logger.bat
+          if exist USER_GUIDE.txt copy /Y USER_GUIDE.txt dist\x86\nh-trade-logger\USER_GUIDE.txt
+
+      - name: Build installer with Inno Setup
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DMyAppVersion=1.0.0 installer\nh-trade-logger.iss
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: nh-trade-logger-installer
+          path: dist/installer/nh-trade-logger-setup-*.exe
+
+      - name: Upload portable bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: nh-trade-logger-portable
+          path: dist/x86/nh-trade-logger/
+
+  release:
+    needs: build
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download installer
+        uses: actions/download-artifact@v4
+        with:
+          name: nh-trade-logger-installer
+          path: dist
+
+      - name: Get short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.0-${{ steps.sha.outputs.short }}
+          name: NH 매매일지 v1.0.0 (${{ steps.sha.outputs.short }})
+          files: dist/nh-trade-logger-setup-*.exe
+          generate_release_notes: true
