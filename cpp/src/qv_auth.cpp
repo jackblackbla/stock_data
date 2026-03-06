@@ -414,6 +414,61 @@ struct QVEventEntry {
 
 std::vector<QVEventEntry> g_event_queue;
 
+// SEH wrapper: must be in a function with no C++ objects that need unwinding
+struct CopyResult {
+    int tr_index;
+    const char* block_name_ptr;
+    const char* data_ptr;
+    int data_len;
+    bool is_login;
+    bool ok;
+};
+
+#pragma warning(push)
+#pragma warning(disable : 4611)
+CopyResult seh_copy_event_payload(std::uint32_t code, LPARAM lparam) {
+    CopyResult result{};
+    result.ok = false;
+
+    __try {
+        if (code == CA_CONNECTED) {
+            const auto* block = reinterpret_cast<const LoginBlock*>(lparam);
+            if (block != nullptr) {
+                result.tr_index = block->tr_index;
+                result.is_login = true;
+                if (block->login_info != nullptr) {
+                    result.data_ptr = reinterpret_cast<const char*>(block->login_info);
+                    result.data_len = static_cast<int>(sizeof(LoginInfo));
+                }
+                result.ok = true;
+            }
+        } else if (code == CA_RECEIVEDATA || code == CA_RECEIVEMESSAGE ||
+                   code == CA_RECEIVEERROR || code == CA_RECEIVECOMPLETE ||
+                   code == CA_RECEIVESISE) {
+            const auto* out = reinterpret_cast<const OutDataBlock<char>*>(lparam);
+            if (out != nullptr) {
+                result.tr_index = out->tr_index;
+                result.is_login = false;
+                if (out->p_data != nullptr) {
+                    result.block_name_ptr = out->p_data->block_name;
+                    if (out->p_data->sz_data != nullptr && out->p_data->len > 0) {
+                        result.data_ptr = out->p_data->sz_data;
+                        result.data_len = out->p_data->len;
+                    }
+                }
+                result.ok = true;
+            }
+        } else {
+            result.ok = true;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        result.ok = false;
+    }
+
+    return result;
+}
+#pragma warning(pop)
+
 LRESULT CALLBACK qv_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     if (msg == WM_WMCAEVENT) {
         QVEventEntry entry;
@@ -429,44 +484,23 @@ LRESULT CALLBACK qv_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
             g_qv_logger->info(oss.str());
         }
 
-        __try {
-            if (entry.code == CA_CONNECTED) {
-                const auto* block = reinterpret_cast<const LoginBlock*>(lparam);
-                if (block != nullptr) {
-                    entry.tr_index = block->tr_index;
-                    if (block->login_info != nullptr) {
-                        entry.data.resize(sizeof(LoginInfo));
-                        std::memcpy(entry.data.data(), block->login_info, sizeof(LoginInfo));
-                        entry.data_len = static_cast<int>(sizeof(LoginInfo));
-                    }
-                }
-            } else if (entry.code == CA_RECEIVEDATA || entry.code == CA_RECEIVEMESSAGE ||
-                       entry.code == CA_RECEIVEERROR || entry.code == CA_RECEIVECOMPLETE ||
-                       entry.code == CA_RECEIVESISE) {
-                const auto* out = reinterpret_cast<const OutDataBlock<char>*>(lparam);
-                if (out != nullptr) {
-                    entry.tr_index = out->tr_index;
-                    if (out->p_data != nullptr) {
-                        if (out->p_data->block_name != nullptr) {
-                            entry.block_name = out->p_data->block_name;
-                        }
-                        if (out->p_data->sz_data != nullptr && out->p_data->len > 0) {
-                            entry.data.assign(out->p_data->sz_data, out->p_data->sz_data + out->p_data->len);
-                            entry.data_len = out->p_data->len;
-                        }
-                    }
-                }
+        CopyResult cr = seh_copy_event_payload(entry.code, lparam);
+        if (cr.ok) {
+            entry.tr_index = cr.tr_index;
+            if (cr.block_name_ptr != nullptr) {
+                entry.block_name = cr.block_name_ptr;
             }
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            if (cr.data_ptr != nullptr && cr.data_len > 0) {
+                entry.data.assign(cr.data_ptr, cr.data_ptr + cr.data_len);
+                entry.data_len = cr.data_len;
+            }
+        } else {
             if (g_qv_logger != nullptr) {
                 g_qv_logger->error(
-                    "Access violation inside qv_wnd_proc while copying event payload. code=" +
+                    "SEH exception in qv_wnd_proc copying payload. code=" +
                     event_code_name(entry.code) + "(" + to_hex_u32(entry.code) + ")" +
-                    " lparam=" + to_hex_ptr(entry.raw_lparam) +
-                    " exception=" + to_hex_u32(static_cast<std::uint32_t>(GetExceptionCode())));
+                    " lparam=" + to_hex_ptr(entry.raw_lparam));
             }
-            entry.data.clear();
-            entry.data_len = 0;
         }
 
         g_event_queue.push_back(std::move(entry));
