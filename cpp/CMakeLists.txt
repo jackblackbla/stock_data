@@ -16,7 +16,7 @@ add_executable(fetch
 target_include_directories(fetch PRIVATE src)
 
 if (MSVC)
-    target_compile_options(fetch PRIVATE /W4 /EHsc)
+    target_compile_options(fetch PRIVATE /W4 /EHsc /utf-8)
     target_compile_definitions(fetch PRIVATE NOMINMAX _CRT_SECURE_NO_WARNINGS)
 else()
     target_compile_options(fetch PRIVATE -Wall -Wextra -Wpedantic)
