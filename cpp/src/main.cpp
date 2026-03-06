@@ -1,5 +1,7 @@
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -8,6 +10,10 @@
 #include "qv_auth.h"
 #include "qv_query.h"
 #include "types.h"
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace {
 constexpr int EXIT_DLL_LOAD_FAILED = 10;
@@ -20,6 +26,32 @@ struct Args {
     std::string output;
     std::string log;
 };
+
+#ifdef _WIN32
+Logger* g_crash_logger = nullptr;
+
+std::string hex32(unsigned long value) {
+    std::ostringstream oss;
+    oss << "0x" << std::uppercase << std::hex << value;
+    return oss.str();
+}
+
+std::string hex_ptr(void* value) {
+    std::ostringstream oss;
+    oss << "0x" << std::uppercase << std::hex << reinterpret_cast<std::uintptr_t>(value);
+    return oss.str();
+}
+
+LONG WINAPI log_unhandled_exception(EXCEPTION_POINTERS* exception_info) {
+    if (g_crash_logger != nullptr && exception_info != nullptr && exception_info->ExceptionRecord != nullptr) {
+        const auto* record = exception_info->ExceptionRecord;
+        g_crash_logger->error(
+            "Unhandled SEH exception code=" + hex32(record->ExceptionCode) +
+            " address=" + hex_ptr(record->ExceptionAddress));
+    }
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+#endif
 
 bool is_valid_date(const std::string& value) {
     if (value.size() != 8) {
@@ -88,6 +120,10 @@ int main(int argc, char* argv[]) {
 
         Logger logger(args.log);
         logger.info("fetch.exe started for trade date: " + args.date);
+#ifdef _WIN32
+        g_crash_logger = &logger;
+        SetUnhandledExceptionFilter(log_unhandled_exception);
+#endif
 
         QVAuth auth(logger);
         if (!auth.load_dll()) {

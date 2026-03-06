@@ -45,7 +45,7 @@ CLI:
 `fetch.exe`는 `wmcaConnect`를 통해 로그인합니다.
 
 - `QV_ID`: 로그인 ID
-- `QV_PASSWORD`: 계좌 비밀번호
+- `QV_PASSWORD`: QV 로그인 비밀번호
 - `QV_CERT_PASSWORD`: 인증서 비밀번호
 - `QV_ACCOUNT_INDEX` (기본 `1`): 조회 계좌 인덱스
 - `QV_DLL_PATH` (선택): `wmca.dll` 절대경로
@@ -58,7 +58,7 @@ CLI:
 - `QV_SPLIT_TR_CODE` (기본 `s8118`): 분할체결 상세 TR 코드
 - `QV_QUERY_TIMEOUT_MS` (기본 `15000`)
 - `QV_TRADE_PASSWORD1`, `QV_TRADE_PASSWORD2` (선택): TR 입력 거래비밀번호
-- `QV_ACCOUNT_PASSWORD` (선택): s8180 입력 비밀번호
+- `QV_ACCOUNT_PASSWORD` (선택): s8180 입력 계좌 비밀번호
 
 기본 구현은 문서 기준 `s8180` 체결조회 + `s8118` 분할체결 상세 구조체 파서를 사용합니다.
 
