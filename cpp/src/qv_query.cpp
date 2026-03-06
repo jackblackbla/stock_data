@@ -53,6 +53,49 @@ namespace {
     return value;
 }
 
+[[maybe_unused]] std::string event_code_name(std::uint32_t code) {
+    switch (code) {
+        case CA_CONNECTED:
+            return "CA_CONNECTED";
+        case CA_DISCONNECTED:
+            return "CA_DISCONNECTED";
+        case CA_SOCKETERROR:
+            return "CA_SOCKETERROR";
+        case CA_RECEIVEDATA:
+            return "CA_RECEIVEDATA";
+        case CA_RECEIVESISE:
+            return "CA_RECEIVESISE";
+        case CA_RECEIVEMESSAGE:
+            return "CA_RECEIVEMESSAGE";
+        case CA_RECEIVECOMPLETE:
+            return "CA_RECEIVECOMPLETE";
+        case CA_RECEIVEERROR:
+            return "CA_RECEIVEERROR";
+        default:
+            return "UNKNOWN_EVENT";
+    }
+}
+
+[[maybe_unused]] std::string hex_preview(const char* data, int length, int limit = 32) {
+    if (data == nullptr || length <= 0) {
+        return "";
+    }
+
+    const int preview_len = std::min(length, limit);
+    std::ostringstream oss;
+    for (int i = 0; i < preview_len; ++i) {
+        if (i > 0) {
+            oss << ' ';
+        }
+        oss << std::uppercase << std::hex << std::setw(2) << std::setfill('0')
+            << static_cast<int>(static_cast<unsigned char>(data[i]));
+    }
+    if (length > preview_len) {
+        oss << " ...";
+    }
+    return oss.str();
+}
+
 std::string digits_only(const std::string& raw) {
     std::string out;
     out.reserve(raw.size());
@@ -562,6 +605,12 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
     set_fixed_field(input.trad_pswd2z44, env_or_empty("QV_TRADE_PASSWORD2"));
     set_fixed_field(input.IsPageUp, is_page_up ? "N" : "");
 
+    logger_.info(
+        "Submitting s8180 tr_index=" + std::to_string(tr_index) +
+        " trade_date=" + trade_date +
+        " cts=" + (cts.empty() ? std::string("<empty>") : cts) +
+        " is_page_up=" + std::string(is_page_up ? "Y" : "N"));
+
     if (!auth_.submit_query(tr_index, tr_code, &input, static_cast<int>(sizeof(input)))) {
         logger_.error("submit_query failed for tr=" + tr_code);
         return false;
@@ -595,6 +644,12 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
             return false;
         }
 
+        logger_.info(
+            "s8180 event tr_index=" + std::to_string(event.tr_index) +
+            " code=" + event_code_name(event.code) +
+            " block_name=" + (event.block_name.empty() ? std::string("<empty>") : event.block_name) +
+            " data_len=" + std::to_string(event.data_len));
+
         if (event.code == CA_RECEIVEMESSAGE) {
             if (event.tr_index == tr_index && !event.data.empty() &&
                 event.data_len >= static_cast<int>(sizeof(MessageHeader))) {
@@ -624,9 +679,16 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
             const char* payload = event.data.data();
             const int payload_len = event.data_len;
 
+            logger_.info(
+                "s8180 received data block_name=" + (block_name.empty() ? std::string("<empty>") : block_name) +
+                " payload_len=" + std::to_string(payload_len));
+
             if (block_name.find("outblock1") != std::string::npos) {
                 const int row_size = static_cast<int>(sizeof(Ts8180OutBlock1));
                 if (payload_len < row_size) {
+                    logger_.warn(
+                        "s8180 outblock1 too short payload_len=" + std::to_string(payload_len) +
+                        " row_size=" + std::to_string(row_size));
                     continue;
                 }
                 if (payload_len % row_size != 0) {
@@ -634,6 +696,9 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
                 }
 
                 const int count = payload_len / row_size;
+                logger_.info(
+                    "s8180 parsing outblock1 count=" + std::to_string(count) +
+                    " row_size=" + std::to_string(row_size));
                 const auto* rows = reinterpret_cast<const Ts8180OutBlock1*>(payload);
                 for (int i = 0; i < count; ++i) {
                     const Ts8180OutBlock1& row = rows[i];
@@ -655,25 +720,62 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
                     }
 
                     if (exec.exec_qty > 0) {
+                        logger_.info(
+                            "s8180 row accepted order_no=" + exec.order_no +
+                            " order_type=" + exec.order_type +
+                            " stock=" + exec.stock_code +
+                            " exec_qty=" + std::to_string(exec.exec_qty) +
+                            " exec_avg_price=" + std::to_string(exec.exec_avg_price));
                         page_out.push_back(exec);
+                    } else {
+                        logger_.warn(
+                            "s8180 row skipped order_no=" + exec.order_no +
+                            " order_type=" + exec.order_type +
+                            " stock=" + exec.stock_code +
+                            " order_qty=" + std::to_string(exec.order_qty) +
+                            " exec_qty=" + std::to_string(exec.exec_qty) +
+                            " exec_avg_price=" + std::to_string(exec.exec_avg_price));
                     }
                 }
                 continue;
             }
 
-            if (block_name.find("outblock_in") != std::string::npos) {
+            if (block_name.find("outblock_in") != std::string::npos ||
+                block_name.find("outblock2") != std::string::npos ||
+                block_name.find("outblock3") != std::string::npos) {
                 if (payload_len >= static_cast<int>(sizeof(Ts8180OutBlockIN))) {
                     const auto* block = reinterpret_cast<const Ts8180OutBlockIN*>(payload);
                     next_cts = trim(cp949_to_utf8(block->ctsz56, static_cast<int>(sizeof(block->ctsz56))));
                     const std::string next = trim(cp949_to_utf8(block->nextbutton, static_cast<int>(sizeof(block->nextbutton))));
                     has_more = !next.empty();
+                    logger_.info(
+                        "s8180 paging block parsed block_name=" + block_name +
+                        " next_cts=" + (next_cts.empty() ? std::string("<empty>") : next_cts) +
+                        " nextbutton=" + (next.empty() ? std::string("<empty>") : next) +
+                        " has_more=" + std::string(has_more ? "Y" : "N"));
+                } else {
+                    logger_.warn(
+                        "s8180 paging block too short block_name=" + block_name +
+                        " payload_len=" + std::to_string(payload_len));
                 }
                 continue;
             }
+
+            logger_.warn(
+                "s8180 unhandled data block block_name=" + (block_name.empty() ? std::string("<empty>") : block_name) +
+                " payload_len=" + std::to_string(payload_len) +
+                " payload_preview=" + hex_preview(payload, payload_len));
         }
 
         if (event.code == CA_RECEIVECOMPLETE) {
             if (event.tr_index == tr_index) {
+                logger_.info(
+                    "s8180 receive complete page_records=" + std::to_string(page_out.size()) +
+                    " next_cts=" + (next_cts.empty() ? std::string("<empty>") : next_cts) +
+                    " has_more=" + std::string(has_more ? "Y" : "N"));
+                if (page_out.empty()) {
+                    logger_.warn("s8180 completed with zero parsed executions for this page");
+                }
                 return true;
             }
         }
@@ -705,6 +807,11 @@ bool QVQuery::fetch_s8118_details(const std::string& trade_date,
     set_fixed_field(input.order_noz10, normalize_order_no(order_no));
     set_fixed_field(input.trad_pswd1z44, env_or_empty("QV_TRADE_PASSWORD1"));
     set_fixed_field(input.trad_pswd2z44, env_or_empty("QV_TRADE_PASSWORD2"));
+
+    logger_.info(
+        "Submitting s8118 tr_index=" + std::to_string(tr_index) +
+        " trade_date=" + trade_date +
+        " order_no=" + normalize_order_no(order_no));
 
     if (!auth_.submit_query(tr_index, tr_code, &input, static_cast<int>(sizeof(input)))) {
         logger_.warn("submit_query failed for s8118 order_no=" + order_no);
@@ -739,6 +846,12 @@ bool QVQuery::fetch_s8118_details(const std::string& trade_date,
             return false;
         }
 
+        logger_.info(
+            "s8118 event tr_index=" + std::to_string(event.tr_index) +
+            " code=" + event_code_name(event.code) +
+            " block_name=" + (event.block_name.empty() ? std::string("<empty>") : event.block_name) +
+            " data_len=" + std::to_string(event.data_len));
+
         if (event.code == CA_RECEIVEMESSAGE) {
             if (event.tr_index == tr_index && !event.data.empty() &&
                 event.data_len >= static_cast<int>(sizeof(MessageHeader))) {
@@ -763,16 +876,26 @@ bool QVQuery::fetch_s8118_details(const std::string& trade_date,
             }
 
             const std::string block_name = lower_ascii(event.block_name);
+            logger_.info(
+                "s8118 received data block_name=" + (block_name.empty() ? std::string("<empty>") : block_name) +
+                " payload_len=" + std::to_string(event.data_len));
             if (block_name.find("outblock") == std::string::npos || block_name.find("outblock_in") != std::string::npos) {
+                logger_.warn("s8118 ignored data block block_name=" + block_name);
                 continue;
             }
 
             const int row_size = static_cast<int>(sizeof(Ts8118OutBlock));
             if (event.data_len < row_size) {
+                logger_.warn(
+                    "s8118 payload shorter than row size payload_len=" + std::to_string(event.data_len) +
+                    " row_size=" + std::to_string(row_size));
                 continue;
             }
 
             const int count = event.data_len / row_size;
+            logger_.info(
+                "s8118 parsing outblock count=" + std::to_string(count) +
+                " row_size=" + std::to_string(row_size));
             const auto* rows = reinterpret_cast<const Ts8118OutBlock*>(event.data.data());
             for (int i = 0; i < count; ++i) {
                 const Ts8118OutBlock& row = rows[i];
@@ -786,7 +909,18 @@ bool QVQuery::fetch_s8118_details(const std::string& trade_date,
                 detail.exec_time = "";
 
                 if (detail.exec_qty > 0) {
+                    logger_.info(
+                        "s8118 row accepted order_no=" + normalize_order_no(order_no) +
+                        " exec_qty=" + std::to_string(detail.exec_qty) +
+                        " exec_amount=" + std::to_string(detail.exec_amount) +
+                        " exec_price=" + std::to_string(detail.exec_price) +
+                        " market=" + detail.market);
                     details.push_back(detail);
+                } else {
+                    logger_.warn(
+                        "s8118 row skipped order_no=" + normalize_order_no(order_no) +
+                        " exec_qty=" + std::to_string(detail.exec_qty) +
+                        " exec_amount=" + std::to_string(detail.exec_amount));
                 }
             }
             continue;
@@ -794,6 +928,9 @@ bool QVQuery::fetch_s8118_details(const std::string& trade_date,
 
         if (event.code == CA_RECEIVECOMPLETE) {
             if (event.tr_index == tr_index) {
+                logger_.info(
+                    "s8118 receive complete order_no=" + normalize_order_no(order_no) +
+                    " detail_count=" + std::to_string(details.size()));
                 return !details.empty();
             }
         }
