@@ -3,12 +3,17 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "logger.h"
 
 struct QVEvent {
     std::uint32_t code = 0;
-    std::intptr_t lparam = 0;
+    std::intptr_t raw_lparam = 0;
+    int tr_index = 0;
+    std::string block_name;
+    std::vector<char> data;
+    int data_len = 0;
 };
 
 class QVAuth {

@@ -596,9 +596,9 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
         }
 
         if (event.code == CA_RECEIVEMESSAGE) {
-            const auto* out = reinterpret_cast<const OutDataBlock<MessageHeader>*>(event.lparam);
-            if (out != nullptr && out->tr_index == tr_index && out->p_data != nullptr && out->p_data->sz_data != nullptr) {
-                const MessageHeader* header = out->p_data->sz_data;
+            if (event.tr_index == tr_index && !event.data.empty() &&
+                event.data_len >= static_cast<int>(sizeof(MessageHeader))) {
+                const auto* header = reinterpret_cast<const MessageHeader*>(event.data.data());
                 const std::string code = trim(cp949_to_utf8(header->message_code, static_cast<int>(sizeof(header->message_code))));
                 const std::string msg = trim(cp949_to_utf8(header->message, static_cast<int>(sizeof(header->message))));
                 logger_.info("s8180 message [" + code + "] " + msg);
@@ -607,9 +607,8 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
         }
 
         if (event.code == CA_RECEIVEERROR) {
-            const auto* out = reinterpret_cast<const OutDataBlock<char>*>(event.lparam);
-            if (out != nullptr && out->tr_index == tr_index && out->p_data != nullptr && out->p_data->sz_data != nullptr) {
-                logger_.error("s8180 error: " + cstr_cp949(out->p_data->sz_data));
+            if (event.tr_index == tr_index && !event.data.empty()) {
+                logger_.error("s8180 error: " + cstr_cp949(event.data.data()));
             } else {
                 logger_.error("s8180 receive error");
             }
@@ -617,14 +616,13 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
         }
 
         if (event.code == CA_RECEIVEDATA) {
-            const auto* out = reinterpret_cast<const OutDataBlock<char>*>(event.lparam);
-            if (out == nullptr || out->tr_index != tr_index || out->p_data == nullptr || out->p_data->sz_data == nullptr) {
+            if (event.tr_index != tr_index || event.data.empty()) {
                 continue;
             }
 
-            const std::string block_name = lower_ascii(cstr_cp949(out->p_data->block_name));
-            const char* payload = out->p_data->sz_data;
-            const int payload_len = out->p_data->len;
+            const std::string block_name = lower_ascii(event.block_name);
+            const char* payload = event.data.data();
+            const int payload_len = event.data_len;
 
             if (block_name.find("outblock1") != std::string::npos) {
                 const int row_size = static_cast<int>(sizeof(Ts8180OutBlock1));
@@ -675,8 +673,7 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
         }
 
         if (event.code == CA_RECEIVECOMPLETE) {
-            const auto* out = reinterpret_cast<const OutDataBlock<char>*>(event.lparam);
-            if (out != nullptr && out->tr_index == tr_index) {
+            if (event.tr_index == tr_index) {
                 return true;
             }
         }
@@ -743,9 +740,9 @@ bool QVQuery::fetch_s8118_details(const std::string& trade_date,
         }
 
         if (event.code == CA_RECEIVEMESSAGE) {
-            const auto* out = reinterpret_cast<const OutDataBlock<MessageHeader>*>(event.lparam);
-            if (out != nullptr && out->tr_index == tr_index && out->p_data != nullptr && out->p_data->sz_data != nullptr) {
-                const MessageHeader* header = out->p_data->sz_data;
+            if (event.tr_index == tr_index && !event.data.empty() &&
+                event.data_len >= static_cast<int>(sizeof(MessageHeader))) {
+                const auto* header = reinterpret_cast<const MessageHeader*>(event.data.data());
                 const std::string code = trim(cp949_to_utf8(header->message_code, static_cast<int>(sizeof(header->message_code))));
                 const std::string msg = trim(cp949_to_utf8(header->message, static_cast<int>(sizeof(header->message))));
                 logger_.info("s8118 message [" + code + "] " + msg);
@@ -754,31 +751,29 @@ bool QVQuery::fetch_s8118_details(const std::string& trade_date,
         }
 
         if (event.code == CA_RECEIVEERROR) {
-            const auto* out = reinterpret_cast<const OutDataBlock<char>*>(event.lparam);
-            if (out != nullptr && out->tr_index == tr_index && out->p_data != nullptr && out->p_data->sz_data != nullptr) {
-                logger_.warn("s8118 error: " + cstr_cp949(out->p_data->sz_data));
+            if (event.tr_index == tr_index && !event.data.empty()) {
+                logger_.warn("s8118 error: " + cstr_cp949(event.data.data()));
             }
             return false;
         }
 
         if (event.code == CA_RECEIVEDATA) {
-            const auto* out = reinterpret_cast<const OutDataBlock<char>*>(event.lparam);
-            if (out == nullptr || out->tr_index != tr_index || out->p_data == nullptr || out->p_data->sz_data == nullptr) {
+            if (event.tr_index != tr_index || event.data.empty()) {
                 continue;
             }
 
-            const std::string block_name = lower_ascii(cstr_cp949(out->p_data->block_name));
+            const std::string block_name = lower_ascii(event.block_name);
             if (block_name.find("outblock") == std::string::npos || block_name.find("outblock_in") != std::string::npos) {
                 continue;
             }
 
             const int row_size = static_cast<int>(sizeof(Ts8118OutBlock));
-            if (out->p_data->len < row_size) {
+            if (event.data_len < row_size) {
                 continue;
             }
 
-            const int count = out->p_data->len / row_size;
-            const auto* rows = reinterpret_cast<const Ts8118OutBlock*>(out->p_data->sz_data);
+            const int count = event.data_len / row_size;
+            const auto* rows = reinterpret_cast<const Ts8118OutBlock*>(event.data.data());
             for (int i = 0; i < count; ++i) {
                 const Ts8118OutBlock& row = rows[i];
                 SplitDetail detail;
@@ -798,8 +793,7 @@ bool QVQuery::fetch_s8118_details(const std::string& trade_date,
         }
 
         if (event.code == CA_RECEIVECOMPLETE) {
-            const auto* out = reinterpret_cast<const OutDataBlock<char>*>(event.lparam);
-            if (out != nullptr && out->tr_index == tr_index) {
+            if (event.tr_index == tr_index) {
                 return !details.empty();
             }
         }

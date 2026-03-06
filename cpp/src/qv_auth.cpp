@@ -3,8 +3,10 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -48,6 +50,43 @@ std::string mask_account(const std::string& account_no) {
 }
 
 #ifdef _WIN32
+std::string to_hex_u32(std::uint32_t value) {
+    std::ostringstream oss;
+    oss << "0x" << std::uppercase << std::hex << value;
+    return oss.str();
+}
+
+std::string to_hex_ptr(std::intptr_t value) {
+    std::ostringstream oss;
+    oss << "0x" << std::uppercase << std::hex << static_cast<std::uintptr_t>(value);
+    return oss.str();
+}
+
+std::string event_code_name(std::uint32_t code) {
+    switch (code) {
+        case CA_CONNECTED:
+            return "CA_CONNECTED";
+        case CA_DISCONNECTED:
+            return "CA_DISCONNECTED";
+        case CA_SOCKETERROR:
+            return "CA_SOCKETERROR";
+        case CA_RECEIVEDATA:
+            return "CA_RECEIVEDATA";
+        case CA_RECEIVESISE:
+            return "CA_RECEIVESISE";
+        case CA_RECEIVEMESSAGE:
+            return "CA_RECEIVEMESSAGE";
+        case CA_RECEIVECOMPLETE:
+            return "CA_RECEIVECOMPLETE";
+        case CA_RECEIVEERROR:
+            return "CA_RECEIVEERROR";
+        default:
+            return "UNKNOWN_EVENT";
+    }
+}
+
+Logger* g_qv_logger = nullptr;
+
 [[maybe_unused]] std::string prompt_line(const std::string& prompt) {
     std::cout << prompt << std::flush;
     std::string out;
@@ -208,7 +247,7 @@ INT_PTR CALLBACK login_dialog_proc(HWND hwnd, UINT message, WPARAM w_param, LPAR
                 hwnd,
                 IDC_EDIT_ID);
 
-            create_dialog_control(0, L"STATIC", L"계좌 비밀번호", WS_CHILD | WS_VISIBLE, 16, 66, 100, 20, hwnd, -1);
+            create_dialog_control(0, L"STATIC", L"QV 로그인 비밀번호", WS_CHILD | WS_VISIBLE, 16, 66, 140, 20, hwnd, -1);
             create_dialog_control(
                 WS_EX_CLIENTEDGE,
                 L"EDIT",
@@ -366,14 +405,71 @@ std::string cstr_cp949(const char* cstr) {
 
 struct QVEventEntry {
     std::uint32_t code;
-    std::intptr_t lparam;
+    std::intptr_t raw_lparam = 0;
+    int tr_index = 0;
+    std::string block_name;
+    std::vector<char> data;
+    int data_len = 0;
 };
 
 std::vector<QVEventEntry> g_event_queue;
 
 LRESULT CALLBACK qv_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     if (msg == WM_WMCAEVENT) {
-        g_event_queue.push_back({static_cast<std::uint32_t>(wparam), static_cast<std::intptr_t>(lparam)});
+        QVEventEntry entry;
+        entry.code = static_cast<std::uint32_t>(wparam);
+        entry.raw_lparam = static_cast<std::intptr_t>(lparam);
+
+        if (g_qv_logger != nullptr) {
+            std::ostringstream oss;
+            oss << "WM_WMCAEVENT hwnd=" << to_hex_ptr(reinterpret_cast<std::intptr_t>(hwnd))
+                << " code=" << event_code_name(entry.code)
+                << "(" << to_hex_u32(entry.code) << ")"
+                << " lparam=" << to_hex_ptr(entry.raw_lparam);
+            g_qv_logger->info(oss.str());
+        }
+
+        __try {
+            if (entry.code == CA_CONNECTED) {
+                const auto* block = reinterpret_cast<const LoginBlock*>(lparam);
+                if (block != nullptr) {
+                    entry.tr_index = block->tr_index;
+                    if (block->login_info != nullptr) {
+                        entry.data.resize(sizeof(LoginInfo));
+                        std::memcpy(entry.data.data(), block->login_info, sizeof(LoginInfo));
+                        entry.data_len = static_cast<int>(sizeof(LoginInfo));
+                    }
+                }
+            } else if (entry.code == CA_RECEIVEDATA || entry.code == CA_RECEIVEMESSAGE ||
+                       entry.code == CA_RECEIVEERROR || entry.code == CA_RECEIVECOMPLETE ||
+                       entry.code == CA_RECEIVESISE) {
+                const auto* out = reinterpret_cast<const OutDataBlock<char>*>(lparam);
+                if (out != nullptr) {
+                    entry.tr_index = out->tr_index;
+                    if (out->p_data != nullptr) {
+                        if (out->p_data->block_name != nullptr) {
+                            entry.block_name = out->p_data->block_name;
+                        }
+                        if (out->p_data->sz_data != nullptr && out->p_data->len > 0) {
+                            entry.data.assign(out->p_data->sz_data, out->p_data->sz_data + out->p_data->len);
+                            entry.data_len = out->p_data->len;
+                        }
+                    }
+                }
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            if (g_qv_logger != nullptr) {
+                g_qv_logger->error(
+                    "Access violation inside qv_wnd_proc while copying event payload. code=" +
+                    event_code_name(entry.code) + "(" + to_hex_u32(entry.code) + ")" +
+                    " lparam=" + to_hex_ptr(entry.raw_lparam) +
+                    " exception=" + to_hex_u32(static_cast<std::uint32_t>(GetExceptionCode())));
+            }
+            entry.data.clear();
+            entry.data_len = 0;
+        }
+
+        g_event_queue.push_back(std::move(entry));
         return 0;
     }
     return DefWindowProcA(hwnd, msg, wparam, lparam);
@@ -506,7 +602,12 @@ bool QVAuth::login() {
         id.c_str(),
         password.c_str(),
         cert_password.c_str());
-    logger_.info("wmcaConnect return code=" + std::to_string(ret));
+    logger_.info(
+        "wmcaConnect return code=" + std::to_string(ret) +
+        " hwnd=" + to_hex_ptr(reinterpret_cast<std::intptr_t>(hwnd_)) +
+        " msg=" + to_hex_u32(WM_WMCAEVENT) +
+        " media_type=" + std::string(1, media_type) +
+        " user_type=" + std::string(1, user_type));
 
     std::string error_message;
     if (!wait_for_connected(env_to_int("QV_LOGIN_TIMEOUT_MS", 30000), error_message)) {
@@ -577,9 +678,13 @@ bool QVAuth::wait_for_event(QVEvent& event, int timeout_ms, std::string& error_m
 
         // Check events captured by qv_wnd_proc
         if (!g_event_queue.empty()) {
-            const auto& entry = g_event_queue.front();
+            auto& entry = g_event_queue.front();
             event.code = entry.code;
-            event.lparam = entry.lparam;
+            event.raw_lparam = entry.raw_lparam;
+            event.tr_index = entry.tr_index;
+            event.block_name = std::move(entry.block_name);
+            event.data = std::move(entry.data);
+            event.data_len = entry.data_len;
             g_event_queue.erase(g_event_queue.begin());
             return true;
         }
@@ -659,6 +764,10 @@ bool QVAuth::create_message_window() {
     }
 
     hwnd_ = reinterpret_cast<void*>(hwnd);
+    g_qv_logger = &logger_;
+    logger_.info(
+        "Created QV message window hwnd=" + to_hex_ptr(reinterpret_cast<std::intptr_t>(hwnd)) +
+        " msg=" + to_hex_u32(WM_WMCAEVENT));
     return true;
 }
 
@@ -669,6 +778,7 @@ void QVAuth::destroy_message_window() {
 
     DestroyWindow(reinterpret_cast<HWND>(hwnd_));
     hwnd_ = nullptr;
+    g_qv_logger = nullptr;
 }
 
 bool QVAuth::resolve_symbols() {
@@ -685,6 +795,7 @@ bool QVAuth::resolve_symbols() {
             logger_.error(std::string("GetProcAddress failed: ") + name);
             return false;
         }
+        logger_.info(std::string("Resolved DLL symbol: ") + name);
         return true;
     };
 
@@ -717,20 +828,32 @@ bool QVAuth::wait_for_connected(int timeout_ms, std::string& error_message) {
             return false;
         }
 
+        logger_.info(
+            "wait_for_connected event=" + event_code_name(event.code) +
+            "(" + to_hex_u32(event.code) + ")" +
+            " raw_lparam=" + to_hex_ptr(event.raw_lparam) +
+            " tr_index=" + std::to_string(event.tr_index) +
+            " data_len=" + std::to_string(event.data_len) +
+            " block_name=" + event.block_name);
+
         if (event.code == CA_CONNECTED) {
-            const auto* login_block = reinterpret_cast<const LoginBlock*>(event.lparam);
-            if (login_block == nullptr || login_block->login_info == nullptr) {
+            if (event.data.empty() || event.data_len < static_cast<int>(sizeof(LoginInfo))) {
                 error_message = "connected event missing login info";
                 return false;
             }
 
-            const LoginInfo* info = login_block->login_info;
+            const auto* info = reinterpret_cast<const LoginInfo*>(event.data.data());
             int account_count = 0;
             try {
                 account_count = std::stoi(fixed_cp949_field(info->account_count, static_cast<int>(sizeof(info->account_count))));
             } catch (...) {
                 account_count = 0;
             }
+
+            logger_.info(
+                "CA_CONNECTED parsed user_id=" +
+                fixed_cp949_field(info->user_id, static_cast<int>(sizeof(info->user_id))) +
+                " account_count=" + std::to_string(account_count));
 
             account_index_ = env_to_int("QV_ACCOUNT_INDEX", 1);
             if (account_index_ <= 0) {
@@ -752,9 +875,8 @@ bool QVAuth::wait_for_connected(int timeout_ms, std::string& error_message) {
         }
 
         if (event.code == CA_RECEIVEMESSAGE) {
-            const auto* out = reinterpret_cast<const OutDataBlock<MessageHeader>*>(event.lparam);
-            if (out != nullptr && out->p_data != nullptr && out->p_data->sz_data != nullptr) {
-                const MessageHeader* header = out->p_data->sz_data;
+            if (!event.data.empty() && event.data_len >= static_cast<int>(sizeof(MessageHeader))) {
+                const auto* header = reinterpret_cast<const MessageHeader*>(event.data.data());
                 const std::string code = fixed_cp949_field(header->message_code, static_cast<int>(sizeof(header->message_code)));
                 const std::string msg = fixed_cp949_field(header->message, static_cast<int>(sizeof(header->message)));
                 logger_.info("Login message [" + code + "] " + msg);
@@ -763,9 +885,8 @@ bool QVAuth::wait_for_connected(int timeout_ms, std::string& error_message) {
         }
 
         if (event.code == CA_RECEIVEERROR) {
-            const auto* out = reinterpret_cast<const OutDataBlock<char>*>(event.lparam);
-            if (out != nullptr && out->p_data != nullptr && out->p_data->sz_data != nullptr) {
-                error_message = cstr_cp949(out->p_data->sz_data);
+            if (!event.data.empty()) {
+                error_message = cstr_cp949(event.data.data());
             } else {
                 error_message = "receive error";
             }
