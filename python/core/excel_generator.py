@@ -54,7 +54,7 @@ def generate_excel(trades: Iterable[TradeRecord], trade_date: str, output_dir: P
         side_label = "매수" if trade.side == "buy" else "매도"
         ws_summary.append(
             [
-                trade.account_masked,
+                trade.account_no,
                 trade.stock_name,
                 side_label,
                 trade.total_qty,
@@ -71,7 +71,7 @@ def generate_excel(trades: Iterable[TradeRecord], trade_date: str, output_dir: P
         for detail in trade.executions:
             ws_detail.append(
                 [
-                    trade.account_masked,
+                    trade.account_no,
                     trade.order_no,
                     trade.stock_name,
                     side_label,

@@ -90,7 +90,7 @@ bool JsonExport::write_accounts_atomic(const std::string& output_path,
             const auto& account = accounts[i];
             out << "{";
             write_number(out, "account_index", account.account_index);
-            write_string(out, "account_masked", account.account_masked, false);
+            write_string(out, "account_no", account.account_no, false);
             out << "}";
             if (i + 1 < accounts.size()) {
                 out << ",";
@@ -125,7 +125,8 @@ bool JsonExport::write_accounts_atomic(const std::string& output_path,
 
 bool JsonExport::write_atomic(const std::string& output_path,
                               const std::string& trade_date,
-                              const std::string& account_masked,
+                              const std::string& account_no,
+                              const std::vector<QVAccount>& accounts,
                               const std::vector<ExecutionRecord>& executions,
                               const std::vector<std::string>& errors,
                               Logger& logger) {
@@ -147,7 +148,7 @@ bool JsonExport::write_atomic(const std::string& output_path,
         write_string(out, "schema_version", "1.0");
         write_string(out, "trade_date", trade_date);
         write_string(out, "generated_at", now_iso_local());
-        write_string(out, "account_masked", account_masked);
+        write_string(out, "account_no", account_no);
         write_string(out, "status", errors.empty() ? "ok" : "partial");
 
         out << "\"errors\":[";
@@ -159,11 +160,24 @@ bool JsonExport::write_atomic(const std::string& output_path,
         }
         out << "],";
 
+        out << "\"accounts\":[";
+        for (std::size_t i = 0; i < accounts.size(); ++i) {
+            const auto& account = accounts[i];
+            out << "{";
+            write_number(out, "account_index", account.account_index);
+            write_string(out, "account_no", account.account_no, false);
+            out << "}";
+            if (i + 1 < accounts.size()) {
+                out << ",";
+            }
+        }
+        out << "],";
+
         out << "\"executions\":[";
         for (std::size_t i = 0; i < executions.size(); ++i) {
             const auto& e = executions[i];
             out << "{";
-            write_string(out, "account_masked", e.account_masked);
+            write_string(out, "account_no", e.account_no);
             write_string(out, "order_no", e.order_no);
             write_string(out, "orig_order_no", e.orig_order_no);
             write_string(out, "order_type", e.order_type);

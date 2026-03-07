@@ -49,6 +49,9 @@ class MainWindow(QMainWindow):
         self.session_account_passwords: dict[str, str] = {}
         self.remember_login_session = True
         self.remember_account_session = True
+        self.active_credentials: LoginCredentials | None = None
+        self.active_selections = []
+        self._initial_json_supplied = initial_json is not None
 
         self.setWindowTitle("NH 매매일지 자동화")
         self.resize(1100, 720)
@@ -74,6 +77,7 @@ class MainWindow(QMainWindow):
                 default_date = parsed
         self.date_edit.setDate(default_date)
 
+        self.btn_login = QPushButton("로그인 변경")
         self.btn_fetch = QPushButton("조회")
         self.btn_excel = QPushButton("엑셀 생성")
         self.btn_open = QPushButton("열기")
@@ -81,6 +85,7 @@ class MainWindow(QMainWindow):
         top = QHBoxLayout()
         top.addWidget(QLabel("날짜:"))
         top.addWidget(self.date_edit)
+        top.addWidget(self.btn_login)
         top.addWidget(self.btn_fetch)
         top.addWidget(self.btn_excel)
         top.addWidget(self.btn_open)
@@ -94,16 +99,16 @@ class MainWindow(QMainWindow):
         container.setLayout(root)
         self.setCentralWidget(container)
 
+        self.btn_login.clicked.connect(self.on_login_clicked)
         self.btn_fetch.clicked.connect(self.on_fetch_clicked)
         self.btn_excel.clicked.connect(self.on_excel_clicked)
         self.btn_open.clicked.connect(self.on_open_clicked)
 
-        self.statusBar().showMessage("준비")
+        self.statusBar().showMessage("로그인 필요")
 
         if initial_json:
             self.load_from_json(initial_json)
-        if self.startup_warnings:
-            QTimer.singleShot(0, self.show_startup_warnings)
+        QTimer.singleShot(0, self._startup_sequence)
 
     def current_trade_date(self) -> str:
         return self.date_edit.date().toString("yyyy-MM-dd")
@@ -116,37 +121,23 @@ class MainWindow(QMainWindow):
 
     def on_fetch_clicked(self) -> None:
         try:
-            credentials = self._prompt_login_credentials()
-            if credentials is None:
+            if not self._ensure_session():
                 return
 
-            accounts = self.fetch_service.list_accounts(credentials)
-            selection_dialog = AccountSelectionDialog(
-                accounts=accounts,
-                remembered_passwords=self.session_account_passwords,
-                remember_checked=self.remember_account_session,
-                parent=self,
-            )
-            if selection_dialog.exec_() != selection_dialog.Accepted:
-                return
-            selections = selection_dialog.selected_accounts()
-            self.remember_account_session = selection_dialog.remember_session()
-            if self.remember_account_session:
-                self.session_account_passwords = {
-                    item.account_masked: item.account_password for item in selections if item.account_password
-                }
-            else:
-                self.session_account_passwords = {}
-
-            json_path = self.fetch_service.run_multi(
+            json_path = self.fetch_service.run_multi_session(
                 self.current_trade_date_compact(),
                 self.current_json_path(),
-                credentials,
-                selections,
+                self.active_selections,
             )
             self.load_from_json(json_path)
         except FetchError as exc:
             QMessageBox.critical(self, "조회 실패", str(exc))
+
+    def on_login_clicked(self) -> None:
+        if self._ensure_session(force=True):
+            if self.model.trades():
+                self.model.set_trades([])
+            self.update_status()
 
     def load_from_json(self, json_path: Path) -> None:
         try:
@@ -201,7 +192,7 @@ class MainWindow(QMainWindow):
         try:
             self.reason_store.save_reason(
                 trade_date=self.current_trade_date(),
-                account_masked=trade.account_masked,
+                account_no=trade.account_no,
                 order_no=trade.order_no,
                 stock_code=trade.stock_code,
                 stock_name=trade.stock_name,
@@ -214,11 +205,17 @@ class MainWindow(QMainWindow):
 
     def update_status(self) -> None:
         trades = self.model.trades()
+        if not trades:
+            if self.active_selections:
+                self.statusBar().showMessage(f"로그인됨 / 선택 계좌 {len(self.active_selections)}개 / 조회 대기")
+            else:
+                self.statusBar().showMessage("로그인 필요")
+            return
         buy_count = sum(1 for trade in trades if trade.side == "buy")
         sell_count = sum(1 for trade in trades if trade.side == "sell")
         total_amount = sum(trade.total_amount for trade in trades)
         missing = sum(1 for trade in trades if not trade.reason.strip())
-        account_count = len({trade.account_masked for trade in trades if trade.account_masked})
+        account_count = len({trade.account_no for trade in trades if trade.account_no})
         self.statusBar().showMessage(
             f"계좌 {account_count}개 / 매수 {buy_count}건 / 매도 {sell_count}건 / 총 체결금액: ₩{total_amount:,} / 근거 미입력 {missing}건"
         )
@@ -227,10 +224,20 @@ class MainWindow(QMainWindow):
         message = "\n\n".join(self.startup_warnings)
         QMessageBox.warning(self, "실행 전 확인", message)
 
+    def _startup_sequence(self) -> None:
+        if self.startup_warnings:
+            self.show_startup_warnings()
+        if self._initial_json_supplied:
+            return
+        if not self._ensure_session():
+            self.close()
+            return
+        self.update_status()
+
     def _prompt_login_credentials(self) -> LoginCredentials | None:
         dialog = LoginCredentialsDialog(
             self,
-            initial=self.session_credentials,
+            initial=self.session_credentials or self.active_credentials,
             remember_checked=self.remember_login_session,
         )
         if dialog.exec_() != dialog.Accepted:
@@ -245,6 +252,55 @@ class MainWindow(QMainWindow):
         else:
             self.session_credentials = None
         return credentials
+
+    def _ensure_session(self, force: bool = False) -> bool:
+        if not force and self.active_credentials is not None and self.active_selections:
+            return True
+
+        if force:
+            self.fetch_service.close_session()
+            self.active_credentials = None
+            self.active_selections = []
+
+        credentials = self._prompt_login_credentials()
+        if credentials is None:
+            return False
+
+        try:
+            accounts = self.fetch_service.open_session(credentials)
+        except FetchError as exc:
+            QMessageBox.critical(self, "로그인 실패", str(exc))
+            return False
+
+        selection_dialog = AccountSelectionDialog(
+            accounts=accounts,
+            remembered_passwords=self.session_account_passwords,
+            remember_checked=self.remember_account_session,
+            parent=self,
+        )
+        if selection_dialog.exec_() != selection_dialog.Accepted:
+            self.fetch_service.close_session()
+            return False
+
+        selections = selection_dialog.selected_accounts()
+        self.active_credentials = credentials
+        self.active_selections = selections
+        self.remember_account_session = selection_dialog.remember_session()
+        if self.remember_account_session:
+            self.session_account_passwords = {
+                item.account_no: item.account_password for item in selections if item.account_password
+            }
+        else:
+            self.session_account_passwords = {}
+        return True
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        self.fetch_service.close_session()
+        self.active_credentials = None
+        self.active_selections = []
+        self.session_credentials = None
+        self.session_account_passwords = {}
+        super().closeEvent(event)
 
     @staticmethod
     def _open_file(path: Path) -> None:

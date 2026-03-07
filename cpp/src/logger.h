@@ -6,7 +6,7 @@
 
 class Logger {
 public:
-    explicit Logger(const std::string& file_path);
+    explicit Logger(const std::string& file_path, bool mirror_stdout = true);
     ~Logger();
 
     void info(const std::string& message);
@@ -15,6 +15,7 @@ public:
 
 private:
     std::ofstream stream_;
+    bool mirror_stdout_ = true;
     void write(const std::string& level, const std::string& message);
 };
 

@@ -19,7 +19,7 @@ NH투자증권 QV Open API 체결 데이터를 조회하고, 매매 근거를 �
 - `schema_version`
 - `trade_date`
 - `generated_at`
-- `account_masked`
+- `account_no`
 - `status`
 - `errors[]`
 - `executions[]`

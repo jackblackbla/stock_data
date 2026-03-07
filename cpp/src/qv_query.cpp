@@ -647,7 +647,7 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
                 for (int i = 0; i < count; ++i) {
                     const Ts8180OutBlock1& row = rows[i];
                     ExecutionRecord exec;
-                    exec.account_masked = auth_.masked_account();
+                    exec.account_no = auth_.account_no();
                     exec.order_no = normalize_order_no(fixed_cp949_field(row.order_noz10));
                     exec.orig_order_no = normalize_order_no(fixed_cp949_field(row.orgnl_order_noz10));
                     exec.order_type = fixed_cp949_field(row.order_kindz20);
@@ -892,7 +892,7 @@ bool QVQuery::fill_mock_s8180(const std::string& trade_date,
 
     if (cts.empty()) {
         ExecutionRecord e1;
-        e1.account_masked = auth_.masked_account();
+        e1.account_no = auth_.account_no();
         e1.order_no = pad_order_no(1);
         e1.orig_order_no = pad_order_no(0);
         e1.order_type = "현금매수";
@@ -915,7 +915,7 @@ bool QVQuery::fill_mock_s8180(const std::string& trade_date,
 
     if (cts == "PAGE2") {
         ExecutionRecord e2;
-        e2.account_masked = auth_.masked_account();
+        e2.account_no = auth_.account_no();
         e2.order_no = pad_order_no(2);
         e2.orig_order_no = pad_order_no(0);
         e2.order_type = "현금매도";

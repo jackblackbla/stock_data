@@ -11,7 +11,7 @@ from core.models import ExecutionDetail, TradeRecord
 def test_generate_excel(tmp_path: Path) -> None:
     trades = [
         TradeRecord(
-            account_masked="04501****",
+            account_no="04501012345",
             order_no="0000000001",
             orig_order_no="0000000000",
             order_type="현금매수",
@@ -36,12 +36,12 @@ def test_generate_excel(tmp_path: Path) -> None:
     assert wb.sheetnames == ["매매 요약", "체결 상세"]
 
     ws_summary = wb["매매 요약"]
-    assert ws_summary["A2"].value == "04501****"
+    assert ws_summary["A2"].value == "04501012345"
     assert ws_summary["B2"].value == "삼성전자"
     assert ws_summary["C2"].value == "매수"
     assert ws_summary["D2"].value == 100
 
     ws_detail = wb["체결 상세"]
-    assert ws_detail["A2"].value == "04501****"
+    assert ws_detail["A2"].value == "04501012345"
     assert ws_detail["B2"].value == "0000000001"
     assert ws_detail["E2"].value == "09:31:02"

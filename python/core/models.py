@@ -15,7 +15,7 @@ class ExecutionDetail:
 
 @dataclass
 class TradeRecord:
-    account_masked: str
+    account_no: str
     order_no: str
     orig_order_no: str
     order_type: str

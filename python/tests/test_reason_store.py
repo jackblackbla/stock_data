@@ -13,7 +13,7 @@ def test_upsert_and_get_reason(tmp_path: Path) -> None:
 
     store.save_reason(
         trade_date="2026-03-05",
-        account_masked="04501****",
+        account_no="04501012345",
         order_no="0000000001",
         stock_code="005930",
         stock_name="삼성전자",
@@ -23,7 +23,7 @@ def test_upsert_and_get_reason(tmp_path: Path) -> None:
 
     store.save_reason(
         trade_date="2026-03-05",
-        account_masked="04501****",
+        account_no="04501012345",
         order_no="0000000001",
         stock_code="005930",
         stock_name="삼성전자",
@@ -32,7 +32,7 @@ def test_upsert_and_get_reason(tmp_path: Path) -> None:
     )
 
     reasons = store.get_reasons("2026-03-05")
-    assert reasons[trade_reason_key("04501****", "0000000001")] == "상향 추세"
+    assert reasons[trade_reason_key("04501012345", "0000000001")] == "상향 추세"
 
 
 def test_count_missing_reasons(tmp_path: Path) -> None:
@@ -41,7 +41,7 @@ def test_count_missing_reasons(tmp_path: Path) -> None:
 
     trades = [
         TradeRecord(
-            account_masked="04501****",
+            account_no="04501012345",
             order_no="0000000001",
             orig_order_no="0000000000",
             order_type="현금매수",
@@ -54,7 +54,7 @@ def test_count_missing_reasons(tmp_path: Path) -> None:
             executions=[],
         ),
         TradeRecord(
-            account_masked="200*****21",
+            account_no="20088000021",
             order_no="0000000002",
             orig_order_no="0000000000",
             order_type="현금매도",
@@ -70,7 +70,7 @@ def test_count_missing_reasons(tmp_path: Path) -> None:
 
     store.save_reason(
         trade_date="2026-03-05",
-        account_masked="04501****",
+        account_no="04501012345",
         order_no="0000000001",
         stock_code="005930",
         stock_name="삼성전자",

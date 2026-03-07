@@ -26,7 +26,7 @@ def test_fallback_to_aggregate_when_split_missing() -> None:
         "schema_version": "1.0",
         "trade_date": "20260305",
         "generated_at": "2026-03-05T15:41:00",
-        "account_masked": "******7890",
+        "account_no": "04501012345",
         "status": "ok",
         "errors": [],
         "executions": [
@@ -64,6 +64,6 @@ def test_merge_reasons() -> None:
     payload = load_fetch_json(fixture)
     trades = parse_trades(payload)
 
-    merge_reasons(trades, {trade_reason_key("******7890", "0000000001"): "실적호조"})
+    merge_reasons(trades, {trade_reason_key("04501012345", "0000000001"): "실적호조"})
     target = next(t for t in trades if t.order_no == "0000000001")
     assert target.reason == "실적호조"

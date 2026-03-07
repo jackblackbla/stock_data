@@ -2,7 +2,7 @@
   "schema_version": "1.0",
   "trade_date": "20260305",
   "generated_at": "2026-03-05T15:41:00",
-  "account_masked": "******7890",
+  "account_no": "04501012345",
   "status": "ok",
   "errors": [],
   "executions": [

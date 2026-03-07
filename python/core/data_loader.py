@@ -13,7 +13,7 @@ REQUIRED_ROOT_KEYS = {
     "schema_version",
     "trade_date",
     "generated_at",
-    "account_masked",
+    "account_no",
     "status",
     "errors",
     "executions",
@@ -128,8 +128,8 @@ def load_fetch_json(path: Path) -> dict:
     return payload
 
 
-def trade_reason_key(account_masked: str, order_no: str) -> ReasonKey:
-    return (str(account_masked or ""), normalize_order_no(order_no))
+def trade_reason_key(account_no: str, order_no: str) -> ReasonKey:
+    return (str(account_no or ""), normalize_order_no(order_no))
 
 
 def parse_trades(payload: Mapping[str, object]) -> List[TradeRecord]:
@@ -138,15 +138,15 @@ def parse_trades(payload: Mapping[str, object]) -> List[TradeRecord]:
     executions = payload.get("executions", [])
     if not isinstance(executions, list):
         return []
-    root_account_masked = str(payload.get("account_masked") or "")
+    root_account_no = str(payload.get("account_no") or "")
 
     for item in executions:
         if not isinstance(item, Mapping):
             continue
 
-        account_masked = str(item.get("account_masked") or root_account_masked or "")
+        account_no = str(item.get("account_no") or root_account_no or "")
         order_no = normalize_order_no(item.get("order_no"))
-        reason_key = trade_reason_key(account_masked, order_no)
+        reason_key = trade_reason_key(account_no, order_no)
         details = _build_details(item)
         if not details:
             continue
@@ -159,7 +159,7 @@ def parse_trades(payload: Mapping[str, object]) -> List[TradeRecord]:
         if reason_key not in grouped:
             qty, avg_price, amount = _recompute_metrics(details)
             grouped[reason_key] = TradeRecord(
-                account_masked=account_masked,
+                account_no=account_no,
                 order_no=order_no,
                 orig_order_no=normalize_order_no(item.get("orig_order_no")),
                 order_type=order_type,
@@ -186,13 +186,13 @@ def parse_trades(payload: Mapping[str, object]) -> List[TradeRecord]:
         )
 
     trades = list(grouped.values())
-    trades.sort(key=lambda t: (t.account_masked, t.stock_name, t.order_no))
+    trades.sort(key=lambda t: (t.account_no, t.stock_name, t.order_no))
     return trades
 
 
 def merge_reasons(trades: List[TradeRecord], reasons: Dict[ReasonKey, str]) -> None:
     for idx, trade in enumerate(trades):
-        reason = reasons.get(trade_reason_key(trade.account_masked, trade.order_no), "")
+        reason = reasons.get(trade_reason_key(trade.account_no, trade.order_no), "")
         trades[idx] = replace(trade, reason=reason)
 
 

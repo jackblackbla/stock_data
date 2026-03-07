@@ -16,7 +16,8 @@ public:
 
     static bool write_atomic(const std::string& output_path,
                              const std::string& trade_date,
-                             const std::string& account_masked,
+                             const std::string& account_no,
+                             const std::vector<QVAccount>& accounts,
                              const std::vector<ExecutionRecord>& executions,
                              const std::vector<std::string>& errors,
                              Logger& logger);

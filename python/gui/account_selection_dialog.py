@@ -22,7 +22,7 @@ from core.fetch_service import AccountInfo, AccountSelection
 @dataclass
 class _AccountRow:
     selected: QCheckBox
-    masked: QLabel
+    account_label: QLabel
     password: QLineEdit
     account: AccountInfo
 
@@ -55,14 +55,14 @@ class AccountSelectionDialog(QDialog):
         for row_idx, account in enumerate(accounts, start=1):
             chk = QCheckBox()
             chk.setChecked(True)
-            masked = QLabel(account.account_masked)
-            password = QLineEdit(remembered_passwords.get(account.account_masked, ""))
+            account_label = QLabel(account.account_no)
+            password = QLineEdit(remembered_passwords.get(account.account_no, ""))
             password.setEchoMode(QLineEdit.Password)
             password.setPlaceholderText("4자리")
             grid.addWidget(chk, row_idx, 0, alignment=Qt.AlignCenter)
-            grid.addWidget(masked, row_idx, 1)
+            grid.addWidget(account_label, row_idx, 1)
             grid.addWidget(password, row_idx, 2)
-            self.rows.append(_AccountRow(chk, masked, password, account))
+            self.rows.append(_AccountRow(chk, account_label, password, account))
 
         inner = QWidget()
         inner.setLayout(grid)
@@ -100,7 +100,7 @@ class AccountSelectionDialog(QDialog):
             selected.append(
                 AccountSelection(
                     account_index=row.account.account_index,
-                    account_masked=row.account.account_masked,
+                    account_no=row.account.account_no,
                     account_password=row.password.text().strip(),
                 )
             )
@@ -111,7 +111,7 @@ class AccountSelectionDialog(QDialog):
         if not selected:
             QMessageBox.warning(self, "계좌 선택", "최소 1개 계좌를 선택하세요.")
             return
-        missing = [item.account_masked for item in selected if not item.account_password]
+        missing = [item.account_no for item in selected if not item.account_password]
         if missing:
             QMessageBox.warning(
                 self,

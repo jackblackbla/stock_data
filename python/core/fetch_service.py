@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
@@ -24,13 +24,13 @@ class LoginCredentials:
 @dataclass
 class AccountInfo:
     account_index: int
-    account_masked: str
+    account_no: str
 
 
 @dataclass
 class AccountSelection:
     account_index: int
-    account_masked: str
+    account_no: str
     account_password: str
 
 
@@ -46,6 +46,7 @@ ERROR_MAP = {
 class FetchService:
     app_root: Path
     paths: AppPaths
+    _session_proc: subprocess.Popen[str] | None = field(default=None, init=False, repr=False)
 
     @property
     def fetch_exe(self) -> Path:
@@ -70,14 +71,22 @@ class FetchService:
     def default_accounts_path(self) -> Path:
         return self.paths.json_dir / "accounts.json"
 
+    def session_log_path(self) -> Path:
+        return self.paths.logs_dir / "fetch_session.log"
+
     @staticmethod
     def _base_env(
         credentials: LoginCredentials | None = None,
         account_index: int | None = None,
         account_password: str | None = None,
+        batch_accounts: Iterable[AccountSelection] | None = None,
         require_account_password: bool = True,
     ) -> dict[str, str]:
         env = os.environ.copy()
+        env.pop("QV_ACCOUNT_INDEX", None)
+        env.pop("QV_ACCOUNT_PASSWORD", None)
+        env.pop("QV_BATCH_ACCOUNTS", None)
+        env.pop("QV_REQUIRE_ACCOUNT_PASSWORD", None)
         if credentials is not None:
             env["QV_ID"] = credentials.user_id
             env["QV_PASSWORD"] = credentials.password
@@ -86,9 +95,40 @@ class FetchService:
             env["QV_ACCOUNT_INDEX"] = str(account_index)
         if account_password is not None:
             env["QV_ACCOUNT_PASSWORD"] = account_password
+        if batch_accounts is not None:
+            encoded_accounts = []
+            for item in batch_accounts:
+                encoded_accounts.append(f"{item.account_index}|{item.account_no}|{item.account_password}")
+            env["QV_BATCH_ACCOUNTS"] = ";".join(encoded_accounts)
         if not require_account_password:
             env["QV_REQUIRE_ACCOUNT_PASSWORD"] = "0"
         return env
+
+    @staticmethod
+    def _creationflags() -> int:
+        return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+    @staticmethod
+    def _parse_accounts_payload(payload: dict) -> list[AccountInfo]:
+        accounts = payload.get("accounts")
+        if not isinstance(accounts, list):
+            raise FetchError("계좌 목록 JSON 형식이 올바르지 않습니다.")
+
+        parsed: list[AccountInfo] = []
+        for item in accounts:
+            if not isinstance(item, dict):
+                continue
+            try:
+                account_index = int(item.get("account_index"))
+            except (TypeError, ValueError):
+                continue
+            account_no = str(item.get("account_no") or "").strip()
+            if not account_no:
+                continue
+            parsed.append(AccountInfo(account_index=account_index, account_no=account_no))
+        if not parsed:
+            raise FetchError("로그인 계좌 목록이 비어 있습니다.")
+        return parsed
 
     def list_accounts(self, credentials: LoginCredentials, output_path: Path | None = None) -> list[AccountInfo]:
         output = output_path or self.default_accounts_path()
@@ -112,6 +152,7 @@ class FetchService:
             cwd=self.app_root,
             capture_output=True,
             text=True,
+            creationflags=self._creationflags(),
             env=self._base_env(credentials, require_account_password=False),
         )
         if proc.returncode != 0:
@@ -123,32 +164,16 @@ class FetchService:
             raise FetchError(message)
 
         payload = json.loads(output.read_text(encoding="utf-8"))
-        accounts = payload.get("accounts")
-        if not isinstance(accounts, list):
-            raise FetchError("계좌 목록 JSON 형식이 올바르지 않습니다.")
+        return self._parse_accounts_payload(payload)
 
-        parsed: list[AccountInfo] = []
-        for item in accounts:
-            if not isinstance(item, dict):
-                continue
-            try:
-                account_index = int(item.get("account_index"))
-            except (TypeError, ValueError):
-                continue
-            account_masked = str(item.get("account_masked") or "").strip()
-            if not account_masked:
-                continue
-            parsed.append(AccountInfo(account_index=account_index, account_masked=account_masked))
-        if not parsed:
-            raise FetchError("로그인 계좌 목록이 비어 있습니다.")
-        return parsed
-
-    def run(self,
-            date_compact: str,
-            output_path: Path | None = None,
-            credentials: LoginCredentials | None = None,
-            account_index: int | None = None,
-            account_password: str | None = None) -> Path:
+    def run(
+        self,
+        date_compact: str,
+        output_path: Path | None = None,
+        credentials: LoginCredentials | None = None,
+        account_index: int | None = None,
+        account_password: str | None = None,
+    ) -> Path:
         output = output_path or self.default_json_path(date_compact)
         log_path = self.default_log_path(date_compact)
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -173,10 +198,17 @@ class FetchService:
                 cwd=self.app_root,
                 capture_output=True,
                 text=True,
+                creationflags=self._creationflags(),
                 env=self._base_env(credentials, account_index, account_password),
             )
         else:
-            proc = subprocess.run(cmd, cwd=self.app_root, capture_output=True, text=True)
+            proc = subprocess.run(
+                cmd,
+                cwd=self.app_root,
+                capture_output=True,
+                text=True,
+                creationflags=self._creationflags(),
+            )
         if proc.returncode != 0:
             reason = ERROR_MAP.get(proc.returncode, f"알 수 없는 오류({proc.returncode})")
             detail = (proc.stderr or proc.stdout).strip()
@@ -197,60 +229,174 @@ class FetchService:
         credentials: LoginCredentials,
         selections: Iterable[AccountSelection],
     ) -> Path:
-        payloads: list[dict] = []
-        combined_errors: list[str] = []
         selected = list(selections)
         if not selected:
             raise FetchError("조회할 계좌가 선택되지 않았습니다.")
 
-        for selection in selected:
-            per_account_path = self.paths.json_dir / f"{date_compact}_{selection.account_index}.json"
-            try:
-                path = self.run(
-                    date_compact,
-                    output_path=per_account_path,
-                    credentials=credentials,
-                    account_index=selection.account_index,
-                    account_password=selection.account_password,
-                )
-                payload = json.loads(path.read_text(encoding="utf-8"))
-                payloads.append(payload)
-            except FetchError as exc:
-                combined_errors.append(f"{selection.account_masked}: {exc}")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path = self.default_log_path(date_compact)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
 
-        if not payloads:
-            raise FetchError("\n".join(combined_errors) if combined_errors else "조회 결과가 없습니다.")
+        if not self.fetch_exe.exists():
+            raise FetchError(f"fetch.exe not found: {self.fetch_exe}")
 
-        merged_executions: list[dict] = []
-        merged_accounts: list[dict] = []
-        for payload in payloads:
-            root_account = str(payload.get("account_masked") or "")
-            if root_account:
-                merged_accounts.append({"account_masked": root_account})
-            executions = payload.get("executions", [])
-            if not isinstance(executions, list):
-                continue
-            for execution in executions:
-                if not isinstance(execution, dict):
-                    continue
-                merged = dict(execution)
-                merged.setdefault("account_masked", root_account)
-                merged_executions.append(merged)
-            errors = payload.get("errors", [])
-            if isinstance(errors, list):
-                combined_errors.extend(str(item) for item in errors if str(item).strip())
+        cmd = [
+            str(self.fetch_exe),
+            "--date",
+            date_compact,
+            "--output",
+            str(output_path),
+            "--log",
+            str(log_path),
+        ]
+        proc = subprocess.run(
+            cmd,
+            cwd=self.app_root,
+            capture_output=True,
+            text=True,
+            creationflags=self._creationflags(),
+            env=self._base_env(
+                credentials=credentials,
+                batch_accounts=selected,
+                require_account_password=False,
+            ),
+        )
+        if proc.returncode != 0:
+            reason = ERROR_MAP.get(proc.returncode, f"알 수 없는 오류({proc.returncode})")
+            detail = (proc.stderr or proc.stdout).strip()
+            message = f"fetch 실패: {reason}"
+            if detail:
+                message += f"\n{detail}"
+            raise FetchError(message)
 
-        merged_payload = {
-            "schema_version": "1.0",
-            "trade_date": date_compact,
-            "generated_at": payloads[-1].get("generated_at", ""),
-            "account_masked": "MULTI" if len(payloads) > 1 else str(payloads[0].get("account_masked") or ""),
-            "status": "partial" if combined_errors else "ok",
-            "errors": combined_errors,
-            "accounts": merged_accounts,
-            "executions": merged_executions,
-        }
+        if not output_path.exists():
+            raise FetchError(f"fetch 성공 코드이지만 JSON 파일이 없습니다: {output_path}")
+        return output_path
+
+    def open_session(self, credentials: LoginCredentials) -> list[AccountInfo]:
+        self.close_session()
+        self.paths.logs_dir.mkdir(parents=True, exist_ok=True)
+
+        if not self.fetch_exe.exists():
+            raise FetchError(f"fetch.exe not found: {self.fetch_exe}")
+
+        cmd = [
+            str(self.fetch_exe),
+            "--session",
+            "--log",
+            str(self.session_log_path()),
+        ]
+        self._session_proc = subprocess.Popen(
+            cmd,
+            cwd=self.app_root,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            creationflags=self._creationflags(),
+        )
+
+        try:
+            payload = self._send_session_lines([
+                "LOGIN",
+                credentials.user_id,
+                credentials.password,
+                credentials.cert_password,
+            ])
+        except Exception:
+            self.close_session(force=True)
+            raise
+        return self._parse_accounts_payload(payload)
+
+    def run_multi_session(
+        self,
+        date_compact: str,
+        output_path: Path,
+        selections: Iterable[AccountSelection],
+    ) -> Path:
+        selected = list(selections)
+        if not selected:
+            raise FetchError("조회할 계좌가 선택되지 않았습니다.")
+        if self._session_proc is None:
+            raise FetchError("로그인 세션이 없습니다. 다시 로그인하세요.")
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(json.dumps(merged_payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        return output_path
+        lines = [
+            "QUERY",
+            date_compact,
+            str(output_path),
+            str(len(selected)),
+        ]
+        for item in selected:
+            lines.append(f"{item.account_index}\t{item.account_no}\t{item.account_password}")
+
+        payload = self._send_session_lines(lines)
+        response_output = Path(str(payload.get("output") or output_path))
+        if not response_output.exists():
+            raise FetchError(f"fetch 성공 응답이지만 JSON 파일이 없습니다: {response_output}")
+        return response_output
+
+    def close_session(self, force: bool = False) -> None:
+        proc = self._session_proc
+        self._session_proc = None
+        if proc is None:
+            return
+
+        try:
+            if not force and proc.poll() is None and proc.stdin is not None and proc.stdout is not None:
+                proc.stdin.write("SHUTDOWN\n")
+                proc.stdin.flush()
+                proc.stdout.readline()
+        except Exception:
+            pass
+
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                try:
+                    proc.wait(timeout=1)
+                except Exception:
+                    pass
+
+    def _send_session_lines(self, lines: list[str]) -> dict:
+        proc = self._session_proc
+        if proc is None or proc.stdin is None or proc.stdout is None:
+            raise FetchError("세션 프로세스가 준비되지 않았습니다.")
+
+        if proc.poll() is not None:
+            detail = ""
+            if proc.stderr is not None:
+                detail = proc.stderr.read().strip()
+            raise FetchError(
+                f"세션 프로세스가 종료되었습니다({proc.returncode})." + (f"\n{detail}" if detail else "")
+            )
+
+        for line in lines:
+            proc.stdin.write(line.replace("\r", " ").replace("\n", " ") + "\n")
+        proc.stdin.flush()
+
+        response_line = proc.stdout.readline()
+        if not response_line:
+            detail = ""
+            if proc.stderr is not None:
+                detail = proc.stderr.read().strip()
+            raise FetchError("세션 프로세스 응답이 없습니다." + (f"\n{detail}" if detail else ""))
+
+        try:
+            payload = json.loads(response_line)
+        except json.JSONDecodeError as exc:
+            raise FetchError(f"세션 응답 파싱 실패: {exc}\nraw={response_line!r}") from exc
+
+        if not isinstance(payload, dict):
+            raise FetchError("세션 응답 형식이 올바르지 않습니다.")
+        if not payload.get("ok"):
+            message = str(payload.get("error") or "알 수 없는 세션 오류")
+            raise FetchError(message)
+        return payload

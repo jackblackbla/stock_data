@@ -137,7 +137,7 @@ class TradeTreeModel(QAbstractItemModel):
             return True
 
         self._trades[trade_idx] = TradeRecord(
-            account_masked=trade.account_masked,
+            account_no=trade.account_no,
             order_no=trade.order_no,
             orig_order_no=trade.orig_order_no,
             order_type=trade.order_type,
@@ -159,7 +159,7 @@ class TradeTreeModel(QAbstractItemModel):
     @staticmethod
     def _trade_display(trade: TradeRecord, col: int):
         if col == COL_ACCOUNT:
-            return trade.account_masked
+            return trade.account_no
         if col == COL_STOCK:
             return trade.stock_name
         if col == COL_SIDE:

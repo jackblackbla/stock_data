@@ -22,7 +22,7 @@ std::string now_string() {
 }
 }  // namespace
 
-Logger::Logger(const std::string& file_path) {
+Logger::Logger(const std::string& file_path, bool mirror_stdout) : mirror_stdout_(mirror_stdout) {
     stream_.open(file_path, std::ios::app);
 }
 
@@ -47,7 +47,9 @@ void Logger::error(const std::string& message) {
 
 void Logger::write(const std::string& level, const std::string& message) {
     const std::string line = "[" + now_string() + "] [" + level + "] " + message;
-    std::cout << line << std::endl;
+    if (mirror_stdout_) {
+        std::cout << line << std::endl;
+    }
     if (stream_.is_open()) {
         stream_ << line << '\n';
         stream_.flush();

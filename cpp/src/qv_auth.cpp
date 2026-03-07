@@ -42,22 +42,6 @@ std::string env_or_empty(const char* key) {
     return input.substr(start, end - start);
 }
 
-std::string mask_account(const std::string& account_no) {
-    if (account_no.empty()) {
-        return "****";
-    }
-    if (account_no.rfind("045", 0) == 0 && account_no.size() > 5) {
-        return account_no.substr(0, 5) + std::string(account_no.size() - 5, '*');
-    }
-    if (account_no.rfind("200", 0) == 0 && account_no.size() > 5) {
-        return account_no.substr(0, 3) + std::string(account_no.size() - 5, '*') + account_no.substr(account_no.size() - 2);
-    }
-    if (account_no.size() <= 5) {
-        return account_no.substr(0, std::min<std::size_t>(3, account_no.size())) + "****";
-    }
-    return account_no.substr(0, 3) + std::string(account_no.size() - 5, '*') + account_no.substr(account_no.size() - 2);
-}
-
 #ifdef _WIN32
 std::string to_hex_u32(std::uint32_t value) {
     std::ostringstream oss;
@@ -540,20 +524,16 @@ QVAuth::QVAuth(Logger& logger) : logger_(logger) {}
 
 QVAuth::~QVAuth() {
 #ifdef _WIN32
-    if (!mock_mode_) {
-        if (wmca_disconnect_ != nullptr) {
-            wmca_disconnect_();
-        }
-        destroy_message_window();
-        if (wmca_free_ != nullptr) {
-            wmca_free_();
-        }
-    }
-
-    if (dll_handle_ != nullptr) {
-        FreeLibrary(reinterpret_cast<HMODULE>(dll_handle_));
-        dll_handle_ = nullptr;
-    }
+    // fetch.exe is a short-lived process. Let the OS reclaim the window and DLL
+    // instead of explicitly tearing down wmca.dll, which has been causing
+    // intermittent access violations during shutdown.
+    g_qv_logger = nullptr;
+    hwnd_ = nullptr;
+    wmca_disconnect_ = nullptr;
+    wmca_free_ = nullptr;
+    wmca_connect_ = nullptr;
+    wmca_query_ = nullptr;
+    dll_handle_ = nullptr;
 #endif
 }
 
@@ -564,7 +544,7 @@ bool QVAuth::load_dll() {
         account_no_ = "1234567890";
         account_index_ = 1;
         accounts_.clear();
-        accounts_.push_back(QVAccount{1, account_no_, mask_account(account_no_)});
+        accounts_.push_back(QVAccount{1, account_no_});
         logger_.warn("QV_MOCK=1 enabled. fetch.exe runs in mock mode.");
         return true;
     }
@@ -654,6 +634,34 @@ bool QVAuth::login(bool require_account_password) {
         return false;
     }
 
+    return login_with_credentials(id, password, cert_password, account_password, require_account_password);
+#else
+    (void)require_account_password;
+    logger_.error("QV login is supported only on Windows.");
+    return false;
+#endif
+}
+
+bool QVAuth::login_with_credentials(const std::string& user_id,
+                                    const std::string& password,
+                                    const std::string& cert_password,
+                                    const std::string& account_password,
+                                    bool require_account_password) {
+    if (mock_mode_) {
+        if (!user_id.empty()) {
+            account_no_ = "1234567890";
+        }
+        account_password_ = account_password;
+        return true;
+    }
+
+#ifdef _WIN32
+    if (user_id.empty() || password.empty() || cert_password.empty() ||
+        (require_account_password && account_password.empty())) {
+        logger_.error("ID/QV password/certificate password is required. account password is required for TR query.");
+        return false;
+    }
+
     account_password_ = account_password;
 
     const char media_type = env_to_char("QV_MEDIA_TYPE", 'P');
@@ -669,7 +677,7 @@ bool QVAuth::login(bool require_account_password) {
         static_cast<unsigned long>(WM_WMCAEVENT),
         media_type,
         user_type,
-        id.c_str(),
+        user_id.c_str(),
         password.c_str(),
         cert_password.c_str());
     logger_.info(
@@ -685,9 +693,13 @@ bool QVAuth::login(bool require_account_password) {
         return false;
     }
 
-    logger_.info("QV login succeeded. account=" + masked_account() + " account_index=" + std::to_string(account_index_));
+    logger_.info("QV login succeeded. account=" + account_no() + " account_index=" + std::to_string(account_index_));
     return true;
 #else
+    (void)user_id;
+    (void)password;
+    (void)cert_password;
+    (void)account_password;
     (void)require_account_password;
     logger_.error("QV login is supported only on Windows.");
     return false;
@@ -779,8 +791,37 @@ bool QVAuth::wait_for_event(QVEvent& event, int timeout_ms, std::string& error_m
 #endif
 }
 
-std::string QVAuth::masked_account() const {
-    return mask_account(account_no_.empty() ? "0000000000" : account_no_);
+bool QVAuth::set_active_account(int account_index, const std::string& account_password, std::string& error_message) {
+    if (account_password.empty()) {
+        error_message = "account password is empty";
+        return false;
+    }
+
+    account_password_ = account_password;
+
+    if (accounts_.empty()) {
+        account_index_ = account_index;
+        if (account_no_.empty()) {
+            account_no_ = "0000000000";
+        }
+        return true;
+    }
+
+    const auto it = std::find_if(accounts_.begin(), accounts_.end(), [account_index](const QVAccount& account) {
+        return account.account_index == account_index;
+    });
+    if (it == accounts_.end()) {
+        error_message = "account index not found: " + std::to_string(account_index);
+        return false;
+    }
+
+    account_index_ = it->account_index;
+    account_no_ = it->account_no;
+    return true;
+}
+
+std::string QVAuth::account_no() const {
+    return account_no_.empty() ? "0000000000" : account_no_;
 }
 
 int QVAuth::account_index() const {
@@ -942,7 +983,7 @@ bool QVAuth::wait_for_connected(int timeout_ms, std::string& error_message) {
                 if (account_no.empty()) {
                     continue;
                 }
-                accounts_.push_back(QVAccount{i + 1, account_no, mask_account(account_no)});
+                accounts_.push_back(QVAccount{i + 1, account_no});
             }
 
             account_index_ = env_to_int("QV_ACCOUNT_INDEX", 1);
@@ -956,7 +997,7 @@ bool QVAuth::wait_for_connected(int timeout_ms, std::string& error_message) {
                 account_index_ = accounts_[selected].account_index;
                 std::string account_log = "Available accounts:";
                 for (const auto& account : accounts_) {
-                    account_log += " [" + std::to_string(account.account_index) + "]" + account.account_masked;
+                    account_log += " [" + std::to_string(account.account_index) + "]" + account.account_no;
                 }
                 logger_.info(account_log);
             } else {

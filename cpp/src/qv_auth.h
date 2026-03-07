@@ -19,7 +19,6 @@ struct QVEvent {
 struct QVAccount {
     int account_index = 1;
     std::string account_no;
-    std::string account_masked;
 };
 
 class QVAuth {
@@ -29,13 +28,19 @@ public:
 
     bool load_dll();
     bool login(bool require_account_password = true);
+    bool login_with_credentials(const std::string& user_id,
+                                const std::string& password,
+                                const std::string& cert_password,
+                                const std::string& account_password,
+                                bool require_account_password);
     bool submit_query(int tr_index,
                       const std::string& tr_code,
                       const void* input,
                       int input_size) const;
     bool wait_for_event(QVEvent& event, int timeout_ms, std::string& error_message) const;
+    bool set_active_account(int account_index, const std::string& account_password, std::string& error_message);
 
-    std::string masked_account() const;
+    std::string account_no() const;
     int account_index() const;
     const std::string& account_password() const;
     const std::vector<QVAccount>& accounts() const;
