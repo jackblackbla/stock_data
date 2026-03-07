@@ -843,40 +843,40 @@ bool QVAuth::register_account_password(int account_index, const std::string& pas
 #ifdef _WIN32
     if (wmca_set_account_pwd_ == nullptr) {
         logger_.warn("wmcaSetAccountIndexPwd not available — sending plain password");
+        encrypted_password_.clear();
         return false;
     }
-    const int ret = wmca_set_account_pwd_(account_index, password.c_str());
+    // Signature: BOOL wmcaSetAccountIndexPwd(char* pszHashOut, int nAccountIndex, const char* pszPassword)
+    // pszHashOut receives the encrypted password (44 bytes)
+    char hash_out[45] = {};
+    const int ret = wmca_set_account_pwd_(hash_out, account_index, password.c_str());
+    const std::size_t len = std::strlen(hash_out);
     logger_.info(
         "wmcaSetAccountIndexPwd account_index=" + std::to_string(account_index) +
-        " ret=" + std::to_string(ret));
-    return ret >= 0;
+        " ret=" + std::to_string(ret) +
+        " encrypted_len=" + std::to_string(len));
+    if (len > 0) {
+        encrypted_password_ = std::string(hash_out, std::min(len, static_cast<std::size_t>(44)));
+    } else {
+        logger_.warn("wmcaSetAccountIndexPwd produced empty hash — will use plain password");
+        encrypted_password_.clear();
+    }
+    return ret != 0;
 #else
     (void)account_index;
     (void)password;
+    encrypted_password_.clear();
     return false;
 #endif
 }
 
 std::string QVAuth::get_encrypted_password(int account_index) const {
-#ifdef _WIN32
-    if (wmca_get_account_pwd_ == nullptr) {
-        logger_.warn("wmcaGetAccountIndexPwd not available — returning plain password");
-        return account_password_;
-    }
-    const char* ptr = wmca_get_account_pwd_(account_index);
-    if (ptr == nullptr || ptr[0] == '\0') {
-        logger_.warn("wmcaGetAccountIndexPwd returned null/empty — falling back to plain password");
-        return account_password_;
-    }
-    const std::size_t len = std::strlen(ptr);
-    logger_.info(
-        "wmcaGetAccountIndexPwd account_index=" + std::to_string(account_index) +
-        " encrypted_len=" + std::to_string(len));
-    return std::string(ptr, std::min(len, static_cast<std::size_t>(44)));
-#else
     (void)account_index;
+    if (!encrypted_password_.empty()) {
+        return encrypted_password_;
+    }
+    logger_.warn("No encrypted password available — returning plain password");
     return account_password_;
-#endif
 }
 
 int QVAuth::discard_stale_query_events(const std::string& reason) const {
@@ -1083,7 +1083,6 @@ bool QVAuth::resolve_symbols() {
         }
     };
     load_optional("wmcaSetAccountIndexPwd", wmca_set_account_pwd_);
-    load_optional("wmcaGetAccountIndexPwd", wmca_get_account_pwd_);
 
     return true;
 }

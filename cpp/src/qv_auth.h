@@ -55,6 +55,7 @@ private:
     Logger& logger_;
     std::string account_no_;
     std::string account_password_;
+    std::string encrypted_password_;
     int account_index_ = 1;
     std::vector<QVAccount> accounts_;
     bool mock_mode_ = false;
@@ -65,8 +66,8 @@ private:
     using WmcaConnect = int(__stdcall*)(void*, unsigned long, char, char, const char*, const char*, const char*);
     using WmcaDisconnect = int(__stdcall*)();
     using WmcaQuery = int(__stdcall*)(void*, int, const char*, const char*, int, int);
-    using WmcaSetAccountIndexPwd = int(__stdcall*)(int, const char*);
-    using WmcaGetAccountIndexPwd = const char*(__stdcall*)(int);
+    // BOOL __stdcall wmcaSetAccountIndexPwd(const char* pszHashOut, int nAccountIndex, const char* pszPassword)
+    using WmcaSetAccountIndexPwd = int(__stdcall*)(char*, int, const char*);
 
     void* dll_handle_ = nullptr;
     void* hwnd_ = nullptr;
@@ -76,7 +77,6 @@ private:
     WmcaDisconnect wmca_disconnect_ = nullptr;
     WmcaQuery wmca_query_ = nullptr;
     WmcaSetAccountIndexPwd wmca_set_account_pwd_ = nullptr;
-    WmcaGetAccountIndexPwd wmca_get_account_pwd_ = nullptr;
 
     bool create_message_window();
     void destroy_message_window();
