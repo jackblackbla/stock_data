@@ -107,15 +107,6 @@ std::string digits_only(const std::string& raw) {
     return out;
 }
 
-[[maybe_unused]] bool is_digit_4_password(const std::string& value) {
-    if (value.size() != 4) {
-        return false;
-    }
-    return std::all_of(value.begin(), value.end(), [](unsigned char c) {
-        return std::isdigit(c) != 0;
-    });
-}
-
 [[maybe_unused]] std::string normalize_order_no(const std::string& raw) {
     std::string digits = digits_only(raw);
     if (digits.empty()) {
@@ -547,14 +538,14 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
 
     Ts8180InBlock input{};
     set_fixed_field(input.inq_gubunz1, env_or_default("QV_INQ_GUBUN", "3"));
-    const std::string account_password =
-        auth_.account_password().empty() ? env_or_empty("QV_ACCOUNT_PASSWORD") : auth_.account_password();
+    const std::string encrypted_password = auth_.get_encrypted_password(auth_.account_index());
     logger_.info(
-        "s8180 password validation account_index=" + std::to_string(auth_.account_index()) +
+        "s8180 password account_index=" + std::to_string(auth_.account_index()) +
         " account_no=" + auth_.account_no() +
-        " password_length=" + std::to_string(account_password.size()) +
-        " is_digit_4=" + std::string(is_digit_4_password(account_password) ? "Y" : "N"));
-    set_fixed_field(input.pswd_noz44, account_password);
+        " encrypted_len=" + std::to_string(encrypted_password.size()));
+    std::memset(input.pswd_noz44, '\0', sizeof(input.pswd_noz44));
+    std::memcpy(input.pswd_noz44, encrypted_password.data(),
+                std::min(encrypted_password.size(), sizeof(input.pswd_noz44)));
     set_fixed_field(input.group_noz4, env_or_default("QV_GROUP_NO", "0000"));
     set_fixed_field(input.mkt_slctz1, env_or_default("QV_MKT_SLCT", "0"));
     set_fixed_field(input.order_datez8, trade_date);

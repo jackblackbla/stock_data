@@ -42,6 +42,9 @@ public:
     int discard_stale_query_events(const std::string& reason) const;
     int drain_events_for_tr(int tr_index, int timeout_ms, const std::string& reason) const;
 
+    bool register_account_password(int account_index, const std::string& password);
+    std::string get_encrypted_password(int account_index) const;
+
     std::string account_no() const;
     int account_index() const;
     const std::string& account_password() const;
@@ -62,6 +65,8 @@ private:
     using WmcaConnect = int(__stdcall*)(void*, unsigned long, char, char, const char*, const char*, const char*);
     using WmcaDisconnect = int(__stdcall*)();
     using WmcaQuery = int(__stdcall*)(void*, int, const char*, const char*, int, int);
+    using WmcaSetAccountIndexPwd = int(__stdcall*)(int, const char*);
+    using WmcaGetAccountIndexPwd = int(__stdcall*)(int, char*);
 
     void* dll_handle_ = nullptr;
     void* hwnd_ = nullptr;
@@ -70,6 +75,8 @@ private:
     WmcaConnect wmca_connect_ = nullptr;
     WmcaDisconnect wmca_disconnect_ = nullptr;
     WmcaQuery wmca_query_ = nullptr;
+    WmcaSetAccountIndexPwd wmca_set_account_pwd_ = nullptr;
+    WmcaGetAccountIndexPwd wmca_get_account_pwd_ = nullptr;
 
     bool create_message_window();
     void destroy_message_window();

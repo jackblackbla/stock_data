@@ -817,30 +817,75 @@ bool QVAuth::set_active_account(int account_index, const std::string& account_pa
         if (account_no_.empty()) {
             account_no_ = "0000000000";
         }
-        logger_.info(
-            "Activated account account_index=" + std::to_string(account_index_) +
-            " account_no=" + account_no_ +
-            " password_length=" + std::to_string(account_password_.size()) +
-            " is_digit_4=" + std::string(is_digit_4_password(account_password_) ? "Y" : "N"));
-        return true;
+    } else {
+        const auto it = std::find_if(accounts_.begin(), accounts_.end(), [account_index](const QVAccount& account) {
+            return account.account_index == account_index;
+        });
+        if (it == accounts_.end()) {
+            error_message = "account index not found: " + std::to_string(account_index);
+            return false;
+        }
+        account_index_ = it->account_index;
+        account_no_ = it->account_no;
     }
 
-    const auto it = std::find_if(accounts_.begin(), accounts_.end(), [account_index](const QVAccount& account) {
-        return account.account_index == account_index;
-    });
-    if (it == accounts_.end()) {
-        error_message = "account index not found: " + std::to_string(account_index);
-        return false;
-    }
-
-    account_index_ = it->account_index;
-    account_no_ = it->account_no;
     logger_.info(
         "Activated account account_index=" + std::to_string(account_index_) +
         " account_no=" + account_no_ +
         " password_length=" + std::to_string(account_password_.size()) +
         " is_digit_4=" + std::string(is_digit_4_password(account_password_) ? "Y" : "N"));
+
+    register_account_password(account_index_, account_password_);
     return true;
+}
+
+bool QVAuth::register_account_password(int account_index, const std::string& password) {
+#ifdef _WIN32
+    if (wmca_set_account_pwd_ == nullptr) {
+        logger_.warn("wmcaSetAccountIndexPwd not available — sending plain password");
+        return false;
+    }
+    const int ret = wmca_set_account_pwd_(account_index, password.c_str());
+    logger_.info(
+        "wmcaSetAccountIndexPwd account_index=" + std::to_string(account_index) +
+        " ret=" + std::to_string(ret));
+    return ret >= 0;
+#else
+    (void)account_index;
+    (void)password;
+    return false;
+#endif
+}
+
+std::string QVAuth::get_encrypted_password(int account_index) const {
+#ifdef _WIN32
+    if (wmca_get_account_pwd_ == nullptr) {
+        logger_.warn("wmcaGetAccountIndexPwd not available — returning plain password");
+        return account_password_;
+    }
+    char buf[44] = {};
+    const int ret = wmca_get_account_pwd_(account_index, buf);
+    const std::string encrypted(buf, 44);
+    // Count non-null bytes to check if encryption produced output
+    int non_null = 0;
+    for (int i = 0; i < 44; ++i) {
+        if (buf[i] != '\0') {
+            ++non_null;
+        }
+    }
+    logger_.info(
+        "wmcaGetAccountIndexPwd account_index=" + std::to_string(account_index) +
+        " ret=" + std::to_string(ret) +
+        " non_null_bytes=" + std::to_string(non_null));
+    if (non_null == 0) {
+        logger_.warn("wmcaGetAccountIndexPwd returned empty — falling back to plain password");
+        return account_password_;
+    }
+    return encrypted;
+#else
+    (void)account_index;
+    return account_password_;
+#endif
 }
 
 int QVAuth::discard_stale_query_events(const std::string& reason) const {
@@ -1026,11 +1071,30 @@ bool QVAuth::resolve_symbols() {
         return true;
     };
 
-    return load_symbol("wmcaLoad", wmca_load_) &&
-           load_symbol("wmcaFree", wmca_free_) &&
-           load_symbol("wmcaConnect", wmca_connect_) &&
-           load_symbol("wmcaDisconnect", wmca_disconnect_) &&
-           load_symbol("wmcaQuery", wmca_query_);
+    const bool core_ok = load_symbol("wmcaLoad", wmca_load_) &&
+                         load_symbol("wmcaFree", wmca_free_) &&
+                         load_symbol("wmcaConnect", wmca_connect_) &&
+                         load_symbol("wmcaDisconnect", wmca_disconnect_) &&
+                         load_symbol("wmcaQuery", wmca_query_);
+    if (!core_ok) {
+        return false;
+    }
+
+    // Password encryption symbols — optional (log but don't fail)
+    const auto load_optional = [&](const char* name, auto& out_fn) {
+        out_fn = reinterpret_cast<std::remove_reference_t<decltype(out_fn)>>(GetProcAddress(
+            reinterpret_cast<HMODULE>(dll_handle_),
+            name));
+        if (out_fn == nullptr) {
+            logger_.warn(std::string("Optional DLL symbol not found: ") + name);
+        } else {
+            logger_.info(std::string("Resolved DLL symbol: ") + name);
+        }
+    };
+    load_optional("wmcaSetAccountIndexPwd", wmca_set_account_pwd_);
+    load_optional("wmcaGetAccountIndexPwd", wmca_get_account_pwd_);
+
+    return true;
 }
 
 bool QVAuth::wait_for_connected(int timeout_ms, std::string& error_message) {
