@@ -863,25 +863,16 @@ std::string QVAuth::get_encrypted_password(int account_index) const {
         logger_.warn("wmcaGetAccountIndexPwd not available — returning plain password");
         return account_password_;
     }
-    char buf[44] = {};
-    const int ret = wmca_get_account_pwd_(account_index, buf);
-    const std::string encrypted(buf, 44);
-    // Count non-null bytes to check if encryption produced output
-    int non_null = 0;
-    for (int i = 0; i < 44; ++i) {
-        if (buf[i] != '\0') {
-            ++non_null;
-        }
-    }
-    logger_.info(
-        "wmcaGetAccountIndexPwd account_index=" + std::to_string(account_index) +
-        " ret=" + std::to_string(ret) +
-        " non_null_bytes=" + std::to_string(non_null));
-    if (non_null == 0) {
-        logger_.warn("wmcaGetAccountIndexPwd returned empty — falling back to plain password");
+    const char* ptr = wmca_get_account_pwd_(account_index);
+    if (ptr == nullptr || ptr[0] == '\0') {
+        logger_.warn("wmcaGetAccountIndexPwd returned null/empty — falling back to plain password");
         return account_password_;
     }
-    return encrypted;
+    const std::size_t len = std::strlen(ptr);
+    logger_.info(
+        "wmcaGetAccountIndexPwd account_index=" + std::to_string(account_index) +
+        " encrypted_len=" + std::to_string(len));
+    return std::string(ptr, std::min(len, static_cast<std::size_t>(44)));
 #else
     (void)account_index;
     return account_password_;

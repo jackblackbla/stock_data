@@ -66,7 +66,7 @@ private:
     using WmcaDisconnect = int(__stdcall*)();
     using WmcaQuery = int(__stdcall*)(void*, int, const char*, const char*, int, int);
     using WmcaSetAccountIndexPwd = int(__stdcall*)(int, const char*);
-    using WmcaGetAccountIndexPwd = int(__stdcall*)(int, char*);
+    using WmcaGetAccountIndexPwd = const char*(__stdcall*)(int);
 
     void* dll_handle_ = nullptr;
     void* hwnd_ = nullptr;
