@@ -491,18 +491,24 @@ bool QVQuery::fetch_executions(const std::string& trade_date,
         std::vector<ExecutionRecord> page_records;
         std::string next_cts;
         bool next_has_more = false;
+        bool fatal_error = false;
 
         for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
             page_records.clear();
             next_cts.clear();
             next_has_more = false;
+            fatal_error = false;
 
-            if (fetch_s8180_page(trade_date, cts, page_up, page_records, next_cts, next_has_more)) {
+            if (fetch_s8180_page(trade_date, cts, page_up, page_records, next_cts, next_has_more, fatal_error)) {
                 page_success = true;
                 break;
             }
 
             logger_.warn("s8180 page fetch failed. attempt=" + std::to_string(attempt + 1));
+            if (fatal_error) {
+                logger_.error("s8180 page fetch failed with fatal error. no retry.");
+                return false;
+            }
             if (!is_retryable_failure(attempt, kMaxAttempts)) {
                 return false;
             }
@@ -563,7 +569,8 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
                                bool is_page_up,
                                std::vector<ExecutionRecord>& page_out,
                                std::string& next_cts,
-                               bool& has_more) {
+                               bool& has_more,
+                               bool& fatal_error) {
     if (auth_.is_mock_mode()) {
         return fill_mock_s8180(trade_date, cts, page_out, next_cts, has_more);
     }
@@ -575,19 +582,23 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
     (void)page_out;
     (void)next_cts;
     (void)has_more;
+    (void)fatal_error;
     logger_.error("QV query is supported only on Windows.");
     return false;
 #else
     page_out.clear();
     next_cts.clear();
     has_more = false;
+    fatal_error = false;
 
     const std::string tr_code = env_or_default("QV_EXEC_TR_CODE", "s8180");
     const int tr_index = cts.empty() ? 818000 : 818001;
 
     Ts8180InBlock input{};
     set_fixed_field(input.inq_gubunz1, env_or_default("QV_INQ_GUBUN", "3"));
-    set_fixed_field(input.pswd_noz44, env_or_empty("QV_ACCOUNT_PASSWORD"));
+    const std::string account_password =
+        auth_.account_password().empty() ? env_or_empty("QV_ACCOUNT_PASSWORD") : auth_.account_password();
+    set_fixed_field(input.pswd_noz44, account_password);
     set_fixed_field(input.group_noz4, env_or_default("QV_GROUP_NO", "0000"));
     set_fixed_field(input.mkt_slctz1, env_or_default("QV_MKT_SLCT", "0"));
     set_fixed_field(input.order_datez8, trade_date);
@@ -657,6 +668,11 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
                 const std::string code = trim(cp949_to_utf8(header->message_code, static_cast<int>(sizeof(header->message_code))));
                 const std::string msg = trim(cp949_to_utf8(header->message, static_cast<int>(sizeof(header->message))));
                 logger_.info("s8180 message [" + code + "] " + msg);
+                if (code == "10009" || msg.find("계좌비밀번호") != std::string::npos) {
+                    logger_.error("s8180 account password rejected: " + msg);
+                    fatal_error = true;
+                    return false;
+                }
             }
             continue;
         }
@@ -667,6 +683,7 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
             } else {
                 logger_.error("s8180 receive error");
             }
+            fatal_error = true;
             return false;
         }
 

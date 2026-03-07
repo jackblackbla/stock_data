@@ -25,7 +25,8 @@ private:
                           bool is_page_up,
                           std::vector<ExecutionRecord>& page_out,
                           std::string& next_cts,
-                          bool& has_more);
+                          bool& has_more,
+                          bool& fatal_error);
 
     bool fetch_s8118_details(const std::string& trade_date,
                              const std::string& order_no,

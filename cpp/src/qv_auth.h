@@ -31,11 +31,13 @@ public:
 
     std::string masked_account() const;
     int account_index() const;
+    const std::string& account_password() const;
     bool is_mock_mode() const;
 
 private:
     Logger& logger_;
     std::string account_no_;
+    std::string account_password_;
     int account_index_ = 1;
     bool mock_mode_ = false;
 

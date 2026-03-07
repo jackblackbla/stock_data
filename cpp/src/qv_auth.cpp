@@ -117,13 +117,15 @@ Logger* g_qv_logger = nullptr;
 struct LoginDialogState {
     std::string id;
     std::string password;
+    std::string account_password;
     std::string cert_password;
     bool accepted = false;
 };
 
 constexpr int IDC_EDIT_ID = 1001;
 constexpr int IDC_EDIT_PASSWORD = 1002;
-constexpr int IDC_EDIT_CERT_PASSWORD = 1003;
+constexpr int IDC_EDIT_ACCOUNT_PASSWORD = 1003;
+constexpr int IDC_EDIT_CERT_PASSWORD = 1004;
 
 std::wstring utf8_to_wide(const std::string& input) {
     if (input.empty()) {
@@ -260,14 +262,27 @@ INT_PTR CALLBACK login_dialog_proc(HWND hwnd, UINT message, WPARAM w_param, LPAR
                 hwnd,
                 IDC_EDIT_PASSWORD);
 
-            create_dialog_control(0, L"STATIC", L"인증서 비밀번호", WS_CHILD | WS_VISIBLE, 16, 116, 120, 20, hwnd, -1);
+            create_dialog_control(0, L"STATIC", L"계좌 비밀번호", WS_CHILD | WS_VISIBLE, 16, 116, 120, 20, hwnd, -1);
+            create_dialog_control(
+                WS_EX_CLIENTEDGE,
+                L"EDIT",
+                utf8_to_wide(state->account_password).c_str(),
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | ES_PASSWORD,
+                16,
+                134,
+                268,
+                24,
+                hwnd,
+                IDC_EDIT_ACCOUNT_PASSWORD);
+
+            create_dialog_control(0, L"STATIC", L"인증서 비밀번호", WS_CHILD | WS_VISIBLE, 16, 166, 120, 20, hwnd, -1);
             create_dialog_control(
                 WS_EX_CLIENTEDGE,
                 L"EDIT",
                 utf8_to_wide(state->cert_password).c_str(),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | ES_PASSWORD,
                 16,
-                134,
+                184,
                 268,
                 24,
                 hwnd,
@@ -279,7 +294,7 @@ INT_PTR CALLBACK login_dialog_proc(HWND hwnd, UINT message, WPARAM w_param, LPAR
                 L"확인",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
                 128,
-                174,
+                224,
                 72,
                 26,
                 hwnd,
@@ -290,7 +305,7 @@ INT_PTR CALLBACK login_dialog_proc(HWND hwnd, UINT message, WPARAM w_param, LPAR
                 L"취소",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                 212,
-                174,
+                224,
                 72,
                 26,
                 hwnd,
@@ -309,6 +324,7 @@ INT_PTR CALLBACK login_dialog_proc(HWND hwnd, UINT message, WPARAM w_param, LPAR
                 if (state != nullptr) {
                     state->id = trim(wide_to_utf8(get_control_text(hwnd, IDC_EDIT_ID)));
                     state->password = trim(wide_to_utf8(get_control_text(hwnd, IDC_EDIT_PASSWORD)));
+                    state->account_password = trim(wide_to_utf8(get_control_text(hwnd, IDC_EDIT_ACCOUNT_PASSWORD)));
                     state->cert_password = trim(wide_to_utf8(get_control_text(hwnd, IDC_EDIT_CERT_PASSWORD)));
                     state->accepted = true;
                 }
@@ -339,7 +355,7 @@ bool prompt_windows_credentials(LoginDialogState& state) {
     dialog->x = 10;
     dialog->y = 10;
     dialog->cx = 300;
-    dialog->cy = 215;
+    dialog->cy = 265;
 
     WORD* words = reinterpret_cast<WORD*>(buffer + sizeof(DLGTEMPLATE));
     words[0] = 0;
@@ -594,20 +610,25 @@ bool QVAuth::login() {
 #ifdef _WIN32
     std::string id = trim(env_or_empty("QV_ID"));
     std::string password = trim(env_or_empty("QV_PASSWORD"));
+    std::string account_password = trim(env_or_empty("QV_ACCOUNT_PASSWORD"));
     std::string cert_password = trim(env_or_empty("QV_CERT_PASSWORD"));
 
-    if (id.empty() || password.empty() || cert_password.empty()) {
-        LoginDialogState dialog_state{id, password, cert_password, false};
+    if (id.empty() || password.empty() || account_password.empty() || cert_password.empty()) {
+        LoginDialogState dialog_state{id, password, account_password, cert_password, false};
         if (prompt_windows_credentials(dialog_state)) {
             id = dialog_state.id;
             password = dialog_state.password;
+            account_password = dialog_state.account_password;
             cert_password = dialog_state.cert_password;
         } else {
             if (id.empty()) {
                 id = prompt_line("Enter QV ID: ");
             }
             if (password.empty()) {
-                password = prompt_line("Enter QV account password: ");
+                password = prompt_line("Enter QV login password: ");
+            }
+            if (account_password.empty()) {
+                account_password = prompt_line("Enter account password: ");
             }
             if (cert_password.empty()) {
                 cert_password = prompt_line("Enter certificate password: ");
@@ -615,10 +636,12 @@ bool QVAuth::login() {
         }
     }
 
-    if (id.empty() || password.empty() || cert_password.empty()) {
-        logger_.error("ID/password/certificate password is required.");
+    if (id.empty() || password.empty() || account_password.empty() || cert_password.empty()) {
+        logger_.error("ID/QV password/account password/certificate password is required.");
         return false;
     }
+
+    account_password_ = account_password;
 
     const char media_type = env_to_char("QV_MEDIA_TYPE", 'P');
     const char user_type = env_to_char("QV_USER_TYPE", '1');
@@ -748,6 +771,10 @@ std::string QVAuth::masked_account() const {
 
 int QVAuth::account_index() const {
     return account_index_;
+}
+
+const std::string& QVAuth::account_password() const {
+    return account_password_;
 }
 
 bool QVAuth::is_mock_mode() const {
