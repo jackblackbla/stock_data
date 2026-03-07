@@ -107,6 +107,15 @@ std::string digits_only(const std::string& raw) {
     return out;
 }
 
+[[maybe_unused]] bool is_digit_4_password(const std::string& value) {
+    if (value.size() != 4) {
+        return false;
+    }
+    return std::all_of(value.begin(), value.end(), [](unsigned char c) {
+        return std::isdigit(c) != 0;
+    });
+}
+
 [[maybe_unused]] std::string normalize_order_no(const std::string& raw) {
     std::string digits = digits_only(raw);
     if (digits.empty()) {
