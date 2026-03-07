@@ -8,12 +8,13 @@ from PyQt5.QtGui import QColor, QFont
 from core.models import TradeRecord
 
 
-COL_STOCK = 0
-COL_SIDE = 1
-COL_QTY = 2
-COL_PRICE = 3
-COL_REASON = 4
-COLUMNS = ["종목명", "구분", "수량", "가중평균가", "근거"]
+COL_ACCOUNT = 0
+COL_STOCK = 1
+COL_SIDE = 2
+COL_QTY = 3
+COL_PRICE = 4
+COL_REASON = 5
+COLUMNS = ["계좌", "종목명", "구분", "수량", "가중평균가", "근거"]
 
 NodePtr = Tuple[str, int, int]
 
@@ -136,6 +137,7 @@ class TradeTreeModel(QAbstractItemModel):
             return True
 
         self._trades[trade_idx] = TradeRecord(
+            account_masked=trade.account_masked,
             order_no=trade.order_no,
             orig_order_no=trade.orig_order_no,
             order_type=trade.order_type,
@@ -156,6 +158,8 @@ class TradeTreeModel(QAbstractItemModel):
 
     @staticmethod
     def _trade_display(trade: TradeRecord, col: int):
+        if col == COL_ACCOUNT:
+            return trade.account_masked
         if col == COL_STOCK:
             return trade.stock_name
         if col == COL_SIDE:
@@ -170,6 +174,8 @@ class TradeTreeModel(QAbstractItemModel):
 
     @staticmethod
     def _detail_display(detail, col: int):
+        if col == COL_ACCOUNT:
+            return ""
         if col == COL_STOCK:
             return detail.exec_time
         if col == COL_SIDE:

@@ -1,0 +1,122 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import (
+    QCheckBox,
+    QDialog,
+    QDialogButtonBox,
+    QGridLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
+)
+
+from core.fetch_service import AccountInfo, AccountSelection
+
+
+@dataclass
+class _AccountRow:
+    selected: QCheckBox
+    masked: QLabel
+    password: QLineEdit
+    account: AccountInfo
+
+
+class AccountSelectionDialog(QDialog):
+    def __init__(
+        self,
+        accounts: list[AccountInfo],
+        remembered_passwords: dict[str, str] | None = None,
+        remember_checked: bool = True,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("계좌 선택")
+        self.setModal(True)
+        self.resize(520, 460)
+
+        remembered_passwords = remembered_passwords or {}
+        self.rows: list[_AccountRow] = []
+
+        self.chk_select_all = QCheckBox("전체 선택")
+        self.chk_select_all.setChecked(True)
+        self.chk_select_all.toggled.connect(self._toggle_all)
+
+        grid = QGridLayout()
+        grid.addWidget(QLabel("선택"), 0, 0)
+        grid.addWidget(QLabel("계좌"), 0, 1)
+        grid.addWidget(QLabel("계좌 비밀번호"), 0, 2)
+
+        for row_idx, account in enumerate(accounts, start=1):
+            chk = QCheckBox()
+            chk.setChecked(True)
+            masked = QLabel(account.account_masked)
+            password = QLineEdit(remembered_passwords.get(account.account_masked, ""))
+            password.setEchoMode(QLineEdit.Password)
+            password.setPlaceholderText("4자리")
+            grid.addWidget(chk, row_idx, 0, alignment=Qt.AlignCenter)
+            grid.addWidget(masked, row_idx, 1)
+            grid.addWidget(password, row_idx, 2)
+            self.rows.append(_AccountRow(chk, masked, password, account))
+
+        inner = QWidget()
+        inner.setLayout(grid)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(inner)
+
+        self.chk_remember = QCheckBox("이번 실행 동안 계좌 비밀번호 기억")
+        self.chk_remember.setChecked(remember_checked)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self._on_accept)
+        buttons.rejected.connect(self.reject)
+
+        root = QVBoxLayout()
+        root.addWidget(self.chk_select_all)
+        root.addWidget(scroll)
+        root.addWidget(self.chk_remember)
+        root.addWidget(buttons)
+        self.setLayout(root)
+
+    def _toggle_all(self, checked: bool) -> None:
+        for row in self.rows:
+            row.selected.setChecked(checked)
+
+    def remember_session(self) -> bool:
+        return self.chk_remember.isChecked()
+
+    def selected_accounts(self) -> list[AccountSelection]:
+        selected: list[AccountSelection] = []
+        for row in self.rows:
+            if not row.selected.isChecked():
+                continue
+            selected.append(
+                AccountSelection(
+                    account_index=row.account.account_index,
+                    account_masked=row.account.account_masked,
+                    account_password=row.password.text().strip(),
+                )
+            )
+        return selected
+
+    def _on_accept(self) -> None:
+        selected = self.selected_accounts()
+        if not selected:
+            QMessageBox.warning(self, "계좌 선택", "최소 1개 계좌를 선택하세요.")
+            return
+        missing = [item.account_masked for item in selected if not item.account_password]
+        if missing:
+            QMessageBox.warning(
+                self,
+                "계좌 비밀번호",
+                "선택한 계좌의 비밀번호를 모두 입력하세요.\n" + "\n".join(missing),
+            )
+            return
+        self.accept()

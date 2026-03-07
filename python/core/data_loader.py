@@ -19,6 +19,8 @@ REQUIRED_ROOT_KEYS = {
     "executions",
 }
 
+ReasonKey = tuple[str, str]
+
 
 def _to_int(value: object, default: int = 0) -> int:
     try:
@@ -126,18 +128,25 @@ def load_fetch_json(path: Path) -> dict:
     return payload
 
 
+def trade_reason_key(account_masked: str, order_no: str) -> ReasonKey:
+    return (str(account_masked or ""), normalize_order_no(order_no))
+
+
 def parse_trades(payload: Mapping[str, object]) -> List[TradeRecord]:
-    grouped: "OrderedDict[str, TradeRecord]" = OrderedDict()
+    grouped: "OrderedDict[ReasonKey, TradeRecord]" = OrderedDict()
 
     executions = payload.get("executions", [])
     if not isinstance(executions, list):
         return []
+    root_account_masked = str(payload.get("account_masked") or "")
 
     for item in executions:
         if not isinstance(item, Mapping):
             continue
 
+        account_masked = str(item.get("account_masked") or root_account_masked or "")
         order_no = normalize_order_no(item.get("order_no"))
+        reason_key = trade_reason_key(account_masked, order_no)
         details = _build_details(item)
         if not details:
             continue
@@ -147,9 +156,10 @@ def parse_trades(payload: Mapping[str, object]) -> List[TradeRecord]:
         if side is None:
             continue
 
-        if order_no not in grouped:
+        if reason_key not in grouped:
             qty, avg_price, amount = _recompute_metrics(details)
-            grouped[order_no] = TradeRecord(
+            grouped[reason_key] = TradeRecord(
+                account_masked=account_masked,
                 order_no=order_no,
                 orig_order_no=normalize_order_no(item.get("orig_order_no")),
                 order_type=order_type,
@@ -163,11 +173,11 @@ def parse_trades(payload: Mapping[str, object]) -> List[TradeRecord]:
             )
             continue
 
-        existing = grouped[order_no]
+        existing = grouped[reason_key]
         merged = existing.executions + details
         merged.sort(key=lambda d: (d.exec_time, d.market, d.qty))
         qty, avg_price, amount = _recompute_metrics(merged)
-        grouped[order_no] = replace(
+        grouped[reason_key] = replace(
             existing,
             total_qty=qty,
             avg_price=avg_price,
@@ -176,13 +186,13 @@ def parse_trades(payload: Mapping[str, object]) -> List[TradeRecord]:
         )
 
     trades = list(grouped.values())
-    trades.sort(key=lambda t: (t.stock_name, t.order_no))
+    trades.sort(key=lambda t: (t.account_masked, t.stock_name, t.order_no))
     return trades
 
 
-def merge_reasons(trades: List[TradeRecord], reasons: Dict[str, str]) -> None:
+def merge_reasons(trades: List[TradeRecord], reasons: Dict[ReasonKey, str]) -> None:
     for idx, trade in enumerate(trades):
-        reason = reasons.get(trade.order_no, "")
+        reason = reasons.get(trade_reason_key(trade.account_masked, trade.order_no), "")
         trades[idx] = replace(trade, reason=reason)
 
 

@@ -37,15 +37,15 @@ def generate_excel(trades: Iterable[TradeRecord], trade_date: str, output_dir: P
     ws_summary.title = "매매 요약"
     ws_detail = wb.create_sheet("체결 상세")
 
-    summary_headers = ["종목명", "구분", "총수량", "가중평균가", "총 체결금액", "매매 근거"]
-    detail_headers = ["주문번호", "종목명", "구분", "체결시간", "체결수량", "체결가", "체결금액", "시장"]
+    summary_headers = ["계좌", "종목명", "구분", "총수량", "가중평균가", "총 체결금액", "매매 근거"]
+    detail_headers = ["계좌", "주문번호", "종목명", "구분", "체결시간", "체결수량", "체결가", "체결금액", "시장"]
 
     ws_summary.append(summary_headers)
     ws_detail.append(detail_headers)
 
-    for col in "ABCDEF":
+    for col in "ABCDEFG":
         ws_summary[f"{col}1"].fill = HEADER_FILL
-    for col in "ABCDEFGH":
+    for col in "ABCDEFGHI":
         ws_detail[f"{col}1"].fill = HEADER_FILL
 
     trade_list = list(trades)
@@ -54,6 +54,7 @@ def generate_excel(trades: Iterable[TradeRecord], trade_date: str, output_dir: P
         side_label = "매수" if trade.side == "buy" else "매도"
         ws_summary.append(
             [
+                trade.account_masked,
                 trade.stock_name,
                 side_label,
                 trade.total_qty,
@@ -64,12 +65,13 @@ def generate_excel(trades: Iterable[TradeRecord], trade_date: str, output_dir: P
         )
 
         font = BUY_FONT if trade.side == "buy" else SELL_FONT
-        for col in ("A", "B", "C", "D", "E", "F"):
+        for col in ("A", "B", "C", "D", "E", "F", "G"):
             ws_summary[f"{col}{row_idx}"].font = font
 
         for detail in trade.executions:
             ws_detail.append(
                 [
+                    trade.account_masked,
                     trade.order_no,
                     trade.stock_name,
                     side_label,
@@ -93,11 +95,11 @@ def generate_excel(trades: Iterable[TradeRecord], trade_date: str, output_dir: P
             width = max(len(str(cell.value or "")) for cell in col)
             ws.column_dimensions[col[0].column_letter].width = min(max(width + 2, 10), 28)
 
-    for row in ws_summary.iter_rows(min_row=2, max_row=ws_summary.max_row, min_col=3, max_col=5):
+    for row in ws_summary.iter_rows(min_row=2, max_row=ws_summary.max_row, min_col=4, max_col=6):
         for cell in row:
             cell.number_format = "#,##0"
 
-    for row in ws_detail.iter_rows(min_row=2, max_row=ws_detail.max_row, min_col=5, max_col=7):
+    for row in ws_detail.iter_rows(min_row=2, max_row=ws_detail.max_row, min_col=6, max_col=8):
         for cell in row:
             cell.number_format = "#,##0"
 

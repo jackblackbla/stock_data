@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from core.data_loader import trade_reason_key
 from core.models import TradeRecord
 from core.reason_store import ReasonStore
 
@@ -12,6 +13,7 @@ def test_upsert_and_get_reason(tmp_path: Path) -> None:
 
     store.save_reason(
         trade_date="2026-03-05",
+        account_masked="04501****",
         order_no="0000000001",
         stock_code="005930",
         stock_name="삼성전자",
@@ -21,6 +23,7 @@ def test_upsert_and_get_reason(tmp_path: Path) -> None:
 
     store.save_reason(
         trade_date="2026-03-05",
+        account_masked="04501****",
         order_no="0000000001",
         stock_code="005930",
         stock_name="삼성전자",
@@ -29,7 +32,7 @@ def test_upsert_and_get_reason(tmp_path: Path) -> None:
     )
 
     reasons = store.get_reasons("2026-03-05")
-    assert reasons["0000000001"] == "상향 추세"
+    assert reasons[trade_reason_key("04501****", "0000000001")] == "상향 추세"
 
 
 def test_count_missing_reasons(tmp_path: Path) -> None:
@@ -38,6 +41,7 @@ def test_count_missing_reasons(tmp_path: Path) -> None:
 
     trades = [
         TradeRecord(
+            account_masked="04501****",
             order_no="0000000001",
             orig_order_no="0000000000",
             order_type="현금매수",
@@ -50,6 +54,7 @@ def test_count_missing_reasons(tmp_path: Path) -> None:
             executions=[],
         ),
         TradeRecord(
+            account_masked="200*****21",
             order_no="0000000002",
             orig_order_no="0000000000",
             order_type="현금매도",
@@ -65,6 +70,7 @@ def test_count_missing_reasons(tmp_path: Path) -> None:
 
     store.save_reason(
         trade_date="2026-03-05",
+        account_masked="04501****",
         order_no="0000000001",
         stock_code="005930",
         stock_name="삼성전자",

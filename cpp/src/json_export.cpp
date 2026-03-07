@@ -65,6 +65,64 @@ void write_number(std::ofstream& out, const std::string& key, long long value, b
 }
 }  // namespace
 
+bool JsonExport::write_accounts_atomic(const std::string& output_path,
+                                       const std::vector<QVAccount>& accounts,
+                                       Logger& logger) {
+    try {
+        const std::filesystem::path out_path(output_path);
+        const std::filesystem::path tmp_path = out_path.string() + ".tmp";
+
+        if (out_path.has_parent_path()) {
+            std::filesystem::create_directories(out_path.parent_path());
+        }
+
+        std::ofstream out(tmp_path, std::ios::trunc);
+        if (!out.is_open()) {
+            logger.error("Cannot open tmp file for accounts JSON: " + tmp_path.string());
+            return false;
+        }
+
+        out << "{";
+        write_string(out, "schema_version", "1.0");
+        write_string(out, "generated_at", now_iso_local());
+        out << "\"accounts\":[";
+        for (std::size_t i = 0; i < accounts.size(); ++i) {
+            const auto& account = accounts[i];
+            out << "{";
+            write_number(out, "account_index", account.account_index);
+            write_string(out, "account_masked", account.account_masked, false);
+            out << "}";
+            if (i + 1 < accounts.size()) {
+                out << ",";
+            }
+        }
+        out << "]";
+        out << "}";
+
+        out.flush();
+        out.close();
+
+        std::error_code rename_ec;
+        std::filesystem::rename(tmp_path, out_path, rename_ec);
+        if (rename_ec) {
+            std::error_code remove_ec;
+            std::filesystem::remove(out_path, remove_ec);
+            rename_ec.clear();
+            std::filesystem::rename(tmp_path, out_path, rename_ec);
+            if (rename_ec) {
+                logger.error("Atomic rename failed for accounts JSON.");
+                return false;
+            }
+        }
+
+        logger.info("Accounts JSON exported: " + out_path.string());
+        return true;
+    } catch (const std::exception& ex) {
+        logger.error(std::string("Accounts JSON export exception: ") + ex.what());
+        return false;
+    }
+}
+
 bool JsonExport::write_atomic(const std::string& output_path,
                               const std::string& trade_date,
                               const std::string& account_masked,
@@ -105,6 +163,7 @@ bool JsonExport::write_atomic(const std::string& output_path,
         for (std::size_t i = 0; i < executions.size(); ++i) {
             const auto& e = executions[i];
             out << "{";
+            write_string(out, "account_masked", e.account_masked);
             write_string(out, "order_no", e.order_no);
             write_string(out, "orig_order_no", e.orig_order_no);
             write_string(out, "order_type", e.order_type);

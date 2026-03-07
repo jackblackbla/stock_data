@@ -43,10 +43,19 @@ std::string env_or_empty(const char* key) {
 }
 
 std::string mask_account(const std::string& account_no) {
-    if (account_no.size() <= 4) {
+    if (account_no.empty()) {
         return "****";
     }
-    return std::string(account_no.size() - 4, '*') + account_no.substr(account_no.size() - 4);
+    if (account_no.rfind("045", 0) == 0 && account_no.size() > 5) {
+        return account_no.substr(0, 5) + std::string(account_no.size() - 5, '*');
+    }
+    if (account_no.rfind("200", 0) == 0 && account_no.size() > 5) {
+        return account_no.substr(0, 3) + std::string(account_no.size() - 5, '*') + account_no.substr(account_no.size() - 2);
+    }
+    if (account_no.size() <= 5) {
+        return account_no.substr(0, std::min<std::size_t>(3, account_no.size())) + "****";
+    }
+    return account_no.substr(0, 3) + std::string(account_no.size() - 5, '*') + account_no.substr(account_no.size() - 2);
 }
 
 #ifdef _WIN32
@@ -554,6 +563,8 @@ bool QVAuth::load_dll() {
         mock_mode_ = true;
         account_no_ = "1234567890";
         account_index_ = 1;
+        accounts_.clear();
+        accounts_.push_back(QVAccount{1, account_no_, mask_account(account_no_)});
         logger_.warn("QV_MOCK=1 enabled. fetch.exe runs in mock mode.");
         return true;
     }
@@ -602,7 +613,7 @@ bool QVAuth::load_dll() {
 #endif
 }
 
-bool QVAuth::login() {
+bool QVAuth::login(bool require_account_password) {
     if (mock_mode_) {
         return true;
     }
@@ -613,7 +624,8 @@ bool QVAuth::login() {
     std::string account_password = trim(env_or_empty("QV_ACCOUNT_PASSWORD"));
     std::string cert_password = trim(env_or_empty("QV_CERT_PASSWORD"));
 
-    if (id.empty() || password.empty() || account_password.empty() || cert_password.empty()) {
+    if (id.empty() || password.empty() || cert_password.empty() ||
+        (require_account_password && account_password.empty())) {
         LoginDialogState dialog_state{id, password, account_password, cert_password, false};
         if (prompt_windows_credentials(dialog_state)) {
             id = dialog_state.id;
@@ -627,7 +639,7 @@ bool QVAuth::login() {
             if (password.empty()) {
                 password = prompt_line("Enter QV login password: ");
             }
-            if (account_password.empty()) {
+            if (require_account_password && account_password.empty()) {
                 account_password = prompt_line("Enter account password: ");
             }
             if (cert_password.empty()) {
@@ -636,8 +648,9 @@ bool QVAuth::login() {
         }
     }
 
-    if (id.empty() || password.empty() || account_password.empty() || cert_password.empty()) {
-        logger_.error("ID/QV password/account password/certificate password is required.");
+    if (id.empty() || password.empty() || cert_password.empty() ||
+        (require_account_password && account_password.empty())) {
+        logger_.error("ID/QV password/certificate password is required. account password is required for TR query.");
         return false;
     }
 
@@ -675,6 +688,7 @@ bool QVAuth::login() {
     logger_.info("QV login succeeded. account=" + masked_account() + " account_index=" + std::to_string(account_index_));
     return true;
 #else
+    (void)require_account_password;
     logger_.error("QV login is supported only on Windows.");
     return false;
 #endif
@@ -775,6 +789,10 @@ int QVAuth::account_index() const {
 
 const std::string& QVAuth::account_password() const {
     return account_password_;
+}
+
+const std::vector<QVAccount>& QVAuth::accounts() const {
+    return accounts_;
 }
 
 bool QVAuth::is_mock_mode() const {
@@ -916,18 +934,31 @@ bool QVAuth::wait_for_connected(int timeout_ms, std::string& error_message) {
                 fixed_cp949_field(info->user_id, static_cast<int>(sizeof(info->user_id))) +
                 " account_count=" + std::to_string(account_count));
 
+            accounts_.clear();
+            for (int i = 0; i < account_count; ++i) {
+                const std::string account_no = fixed_cp949_field(
+                    info->account_infoes[i].account_no,
+                    static_cast<int>(sizeof(info->account_infoes[i].account_no)));
+                if (account_no.empty()) {
+                    continue;
+                }
+                accounts_.push_back(QVAccount{i + 1, account_no, mask_account(account_no)});
+            }
+
             account_index_ = env_to_int("QV_ACCOUNT_INDEX", 1);
             if (account_index_ <= 0) {
                 account_index_ = 1;
             }
 
-            int selected = account_index_ - 1;
-            if (account_count > 0) {
-                selected = std::clamp(selected, 0, account_count - 1);
-                account_no_ = fixed_cp949_field(
-                    info->account_infoes[selected].account_no,
-                    static_cast<int>(sizeof(info->account_infoes[selected].account_no)));
-                account_index_ = selected + 1;
+            if (!accounts_.empty()) {
+                int selected = std::clamp(account_index_ - 1, 0, static_cast<int>(accounts_.size()) - 1);
+                account_no_ = accounts_[selected].account_no;
+                account_index_ = accounts_[selected].account_index;
+                std::string account_log = "Available accounts:";
+                for (const auto& account : accounts_) {
+                    account_log += " [" + std::to_string(account.account_index) + "]" + account.account_masked;
+                }
+                logger_.info(account_log);
             } else {
                 account_no_ = "0000000000";
             }

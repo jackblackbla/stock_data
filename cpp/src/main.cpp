@@ -25,6 +25,7 @@ struct Args {
     std::string date;
     std::string output;
     std::string log;
+    bool list_accounts = false;
 };
 
 #ifdef _WIN32
@@ -66,7 +67,8 @@ bool is_valid_date(const std::string& value) {
 }
 
 void print_usage() {
-    std::cerr << "Usage: fetch.exe --date YYYYMMDD --output <json_path> [--log <log_path>]" << std::endl;
+    std::cerr << "Usage: fetch.exe --date YYYYMMDD --output <json_path> [--log <log_path>]\n"
+              << "   or: fetch.exe --list-accounts --output <json_path> [--log <log_path>]" << std::endl;
 }
 
 bool parse_args(int argc, char* argv[], Args& args) {
@@ -84,17 +86,21 @@ bool parse_args(int argc, char* argv[], Args& args) {
             args.log = argv[++i];
             continue;
         }
+        if (token == "--list-accounts") {
+            args.list_accounts = true;
+            continue;
+        }
         return false;
     }
 
-    if (args.date.empty() || args.output.empty()) {
+    if (args.output.empty()) {
         return false;
     }
-    if (!is_valid_date(args.date)) {
+    if (!args.list_accounts && !is_valid_date(args.date)) {
         return false;
     }
     if (args.log.empty()) {
-        args.log = "logs/fetch_" + args.date + ".log";
+        args.log = args.list_accounts ? "logs/fetch_accounts.log" : "logs/fetch_" + args.date + ".log";
     }
     return true;
 }
@@ -119,7 +125,11 @@ int main(int argc, char* argv[]) {
         }
 
         Logger logger(args.log);
-        logger.info("fetch.exe started for trade date: " + args.date);
+        if (args.list_accounts) {
+            logger.info("fetch.exe started for account listing");
+        } else {
+            logger.info("fetch.exe started for trade date: " + args.date);
+        }
         logger.info(std::string("fetch.exe build: ") + __DATE__ + " " + __TIME__);
 #ifdef _WIN32
         g_crash_logger = &logger;
@@ -131,8 +141,16 @@ int main(int argc, char* argv[]) {
             return EXIT_DLL_LOAD_FAILED;
         }
 
-        if (!auth.login()) {
+        if (!auth.login(!args.list_accounts)) {
             return EXIT_LOGIN_FAILED;
+        }
+
+        if (args.list_accounts) {
+            if (!JsonExport::write_accounts_atomic(args.output, auth.accounts(), logger)) {
+                return EXIT_JSON_WRITE_FAILED;
+            }
+            logger.info("fetch.exe completed successfully. accounts=" + std::to_string(auth.accounts().size()));
+            return 0;
         }
 
         QVQuery query(auth, logger);

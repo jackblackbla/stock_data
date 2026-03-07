@@ -21,10 +21,12 @@ from PyQt5.QtWidgets import (
 
 from core.data_loader import load_fetch_json, merge_reasons, parse_trade_date, parse_trades
 from core.excel_generator import generate_excel
-from core.fetch_service import FetchError, FetchService
+from core.fetch_service import FetchError, FetchService, LoginCredentials
 from core.models import TradeRecord
 from core.reason_store import ReasonStore
 from core.runtime_paths import AppPaths
+from gui.account_selection_dialog import AccountSelectionDialog
+from gui.login_dialog import LoginCredentialsDialog
 from gui.reason_delegate import ReasonDelegate
 from gui.trade_tree_model import TradeTreeModel
 
@@ -43,6 +45,10 @@ class MainWindow(QMainWindow):
         self.reason_store = ReasonStore(paths.db_path)
         self.last_excel_path: Path | None = None
         self.startup_warnings = startup_warnings or []
+        self.session_credentials: LoginCredentials | None = None
+        self.session_account_passwords: dict[str, str] = {}
+        self.remember_login_session = True
+        self.remember_account_session = True
 
         self.setWindowTitle("NH 매매일지 자동화")
         self.resize(1100, 720)
@@ -50,7 +56,7 @@ class MainWindow(QMainWindow):
         self.model = TradeTreeModel(self._save_reason)
         self.tree = QTreeView()
         self.tree.setModel(self.model)
-        self.tree.setItemDelegateForColumn(4, ReasonDelegate(self.tree))
+        self.tree.setItemDelegateForColumn(5, ReasonDelegate(self.tree))
         self.tree.setRootIsDecorated(True)
         self.tree.setAlternatingRowColors(True)
         self.tree.setEditTriggers(
@@ -110,7 +116,34 @@ class MainWindow(QMainWindow):
 
     def on_fetch_clicked(self) -> None:
         try:
-            json_path = self.fetch_service.run(self.current_trade_date_compact(), self.current_json_path())
+            credentials = self._prompt_login_credentials()
+            if credentials is None:
+                return
+
+            accounts = self.fetch_service.list_accounts(credentials)
+            selection_dialog = AccountSelectionDialog(
+                accounts=accounts,
+                remembered_passwords=self.session_account_passwords,
+                remember_checked=self.remember_account_session,
+                parent=self,
+            )
+            if selection_dialog.exec_() != selection_dialog.Accepted:
+                return
+            selections = selection_dialog.selected_accounts()
+            self.remember_account_session = selection_dialog.remember_session()
+            if self.remember_account_session:
+                self.session_account_passwords = {
+                    item.account_masked: item.account_password for item in selections if item.account_password
+                }
+            else:
+                self.session_account_passwords = {}
+
+            json_path = self.fetch_service.run_multi(
+                self.current_trade_date_compact(),
+                self.current_json_path(),
+                credentials,
+                selections,
+            )
             self.load_from_json(json_path)
         except FetchError as exc:
             QMessageBox.critical(self, "조회 실패", str(exc))
@@ -130,6 +163,12 @@ class MainWindow(QMainWindow):
             self.model.set_trades(trades)
             self.tree.expandAll()
             self.update_status()
+
+            errors = payload.get("errors", [])
+            if isinstance(errors, list):
+                messages = [str(item).strip() for item in errors if str(item).strip()]
+                if messages:
+                    QMessageBox.warning(self, "부분 조회 실패", "\n".join(messages))
 
             if not trades:
                 QMessageBox.information(self, "조회 결과", "오늘 체결 내역이 없습니다.")
@@ -162,6 +201,7 @@ class MainWindow(QMainWindow):
         try:
             self.reason_store.save_reason(
                 trade_date=self.current_trade_date(),
+                account_masked=trade.account_masked,
                 order_no=trade.order_no,
                 stock_code=trade.stock_code,
                 stock_name=trade.stock_name,
@@ -178,13 +218,33 @@ class MainWindow(QMainWindow):
         sell_count = sum(1 for trade in trades if trade.side == "sell")
         total_amount = sum(trade.total_amount for trade in trades)
         missing = sum(1 for trade in trades if not trade.reason.strip())
+        account_count = len({trade.account_masked for trade in trades if trade.account_masked})
         self.statusBar().showMessage(
-            f"매수 {buy_count}건 / 매도 {sell_count}건 / 총 체결금액: ₩{total_amount:,} / 근거 미입력 {missing}건"
+            f"계좌 {account_count}개 / 매수 {buy_count}건 / 매도 {sell_count}건 / 총 체결금액: ₩{total_amount:,} / 근거 미입력 {missing}건"
         )
 
     def show_startup_warnings(self) -> None:
         message = "\n\n".join(self.startup_warnings)
         QMessageBox.warning(self, "실행 전 확인", message)
+
+    def _prompt_login_credentials(self) -> LoginCredentials | None:
+        dialog = LoginCredentialsDialog(
+            self,
+            initial=self.session_credentials,
+            remember_checked=self.remember_login_session,
+        )
+        if dialog.exec_() != dialog.Accepted:
+            return None
+        credentials = dialog.credentials()
+        if not credentials.user_id or not credentials.password or not credentials.cert_password:
+            QMessageBox.warning(self, "로그인 정보", "QV ID, 로그인 비밀번호, 인증서 비밀번호를 모두 입력하세요.")
+            return None
+        self.remember_login_session = dialog.remember_session()
+        if self.remember_login_session:
+            self.session_credentials = credentials
+        else:
+            self.session_credentials = None
+        return credentials
 
     @staticmethod
     def _open_file(path: Path) -> None:

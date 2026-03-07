@@ -16,13 +16,19 @@ struct QVEvent {
     int data_len = 0;
 };
 
+struct QVAccount {
+    int account_index = 1;
+    std::string account_no;
+    std::string account_masked;
+};
+
 class QVAuth {
 public:
     explicit QVAuth(Logger& logger);
     ~QVAuth();
 
     bool load_dll();
-    bool login();
+    bool login(bool require_account_password = true);
     bool submit_query(int tr_index,
                       const std::string& tr_code,
                       const void* input,
@@ -32,6 +38,7 @@ public:
     std::string masked_account() const;
     int account_index() const;
     const std::string& account_password() const;
+    const std::vector<QVAccount>& accounts() const;
     bool is_mock_mode() const;
 
 private:
@@ -39,6 +46,7 @@ private:
     std::string account_no_;
     std::string account_password_;
     int account_index_ = 1;
+    std::vector<QVAccount> accounts_;
     bool mock_mode_ = false;
 
 #ifdef _WIN32

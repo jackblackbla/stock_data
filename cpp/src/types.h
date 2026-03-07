@@ -13,6 +13,7 @@ struct SplitDetail {
 };
 
 struct ExecutionRecord {
+    std::string account_masked;
     std::string order_no;
     std::string orig_order_no;
     std::string order_type;

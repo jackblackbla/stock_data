@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.data_loader import load_fetch_json, merge_reasons, parse_trade_date, parse_trades
+from core.data_loader import load_fetch_json, merge_reasons, parse_trade_date, parse_trades, trade_reason_key
 
 
 def test_parse_sample_grouping() -> None:
@@ -64,6 +64,6 @@ def test_merge_reasons() -> None:
     payload = load_fetch_json(fixture)
     trades = parse_trades(payload)
 
-    merge_reasons(trades, {"0000000001": "실적호조"})
+    merge_reasons(trades, {trade_reason_key("******7890", "0000000001"): "실적호조"})
     target = next(t for t in trades if t.order_no == "0000000001")
     assert target.reason == "실적호조"
