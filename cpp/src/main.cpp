@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
@@ -93,6 +94,21 @@ std::string trim(const std::string& value) {
         --end;
     }
     return value.substr(start, end - start);
+}
+
+bool contains_protocol_delimiter(const std::string& value) {
+    return value.find('\t') != std::string::npos ||
+           value.find('\r') != std::string::npos ||
+           value.find('\n') != std::string::npos;
+}
+
+bool is_digit_4_password(const std::string& value) {
+    if (value.size() != 4) {
+        return false;
+    }
+    return std::all_of(value.begin(), value.end(), [](unsigned char c) {
+        return std::isdigit(c) != 0;
+    });
 }
 
 std::vector<std::string> split(const std::string& input, char delimiter) {
@@ -235,6 +251,14 @@ bool parse_session_selection_line(const std::string& line,
         error_message = "incomplete account selection";
         return false;
     }
+    if (contains_protocol_delimiter(selection.account_no) || contains_protocol_delimiter(selection.account_password)) {
+        error_message = "invalid control character in account selection";
+        return false;
+    }
+    if (!is_digit_4_password(selection.account_password)) {
+        error_message = "account password must be exactly 4 digits";
+        return false;
+    }
     return true;
 }
 
@@ -272,7 +296,11 @@ bool run_batch_query(QVAuth& auth,
         std::vector<ExecutionRecord> per_account_executions;
         std::vector<std::string> per_account_warnings;
         if (!query.fetch_executions(trade_date, per_account_executions, per_account_warnings)) {
-            const std::string error = auth.account_no() + ": TR 조회 실패";
+            std::string account_error = "TR 조회 실패";
+            if (!per_account_warnings.empty()) {
+                account_error = per_account_warnings.back();
+            }
+            const std::string error = auth.account_no() + ": " + account_error;
             logger.error("Batch account query failed: " + error);
             messages.push_back(error);
             continue;
@@ -394,6 +422,11 @@ int run_session_loop(QVAuth& auth, Logger& logger) {
                     parse_failed = true;
                     break;
                 }
+                logger.info(
+                    "Session QUERY selection account_index=" + std::to_string(selection.account_index) +
+                    " account_no=" + selection.account_no +
+                    " password_length=" + std::to_string(selection.account_password.size()) +
+                    " is_digit_4=" + std::string(is_digit_4_password(selection.account_password) ? "Y" : "N"));
                 selections.push_back(selection);
             }
             if (parse_failed) {

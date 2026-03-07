@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QRegularExpression, Qt
+from PyQt5.QtGui import QRegularExpressionValidator
 from PyQt5.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -59,6 +60,8 @@ class AccountSelectionDialog(QDialog):
             password = QLineEdit(remembered_passwords.get(account.account_no, ""))
             password.setEchoMode(QLineEdit.Password)
             password.setPlaceholderText("4자리")
+            password.setMaxLength(4)
+            password.setValidator(QRegularExpressionValidator(QRegularExpression(r"\d{0,4}"), password))
             grid.addWidget(chk, row_idx, 0, alignment=Qt.AlignCenter)
             grid.addWidget(account_label, row_idx, 1)
             grid.addWidget(password, row_idx, 2)
@@ -117,6 +120,14 @@ class AccountSelectionDialog(QDialog):
                 self,
                 "계좌 비밀번호",
                 "선택한 계좌의 비밀번호를 모두 입력하세요.\n" + "\n".join(missing),
+            )
+            return
+        invalid = [item.account_no for item in selected if not (len(item.account_password) == 4 and item.account_password.isdigit())]
+        if invalid:
+            QMessageBox.warning(
+                self,
+                "계좌 비밀번호",
+                "계좌 비밀번호는 4자리 숫자여야 합니다.\n" + "\n".join(invalid),
             )
             return
         self.accept()

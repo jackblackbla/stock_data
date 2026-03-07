@@ -19,6 +19,8 @@ public:
 private:
     QVAuth& auth_;
     Logger& logger_;
+    [[maybe_unused]] int next_exec_tr_index_ = 818000;
+    [[maybe_unused]] int next_split_tr_index_ = 900000;
 
     bool fetch_s8180_page(const std::string& trade_date,
                           const std::string& cts,
@@ -26,7 +28,8 @@ private:
                           std::vector<ExecutionRecord>& page_out,
                           std::string& next_cts,
                           bool& has_more,
-                          bool& fatal_error);
+                          bool& fatal_error,
+                          std::string& page_error);
 
     bool fetch_s8118_details(const std::string& trade_date,
                              const std::string& order_no,

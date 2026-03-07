@@ -419,14 +419,16 @@ bool QVQuery::fetch_executions(const std::string& trade_date,
         std::string next_cts;
         bool next_has_more = false;
         bool fatal_error = false;
+        std::string page_error;
 
         for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
             page_records.clear();
             next_cts.clear();
             next_has_more = false;
             fatal_error = false;
+            page_error.clear();
 
-            if (fetch_s8180_page(trade_date, cts, page_up, page_records, next_cts, next_has_more, fatal_error)) {
+            if (fetch_s8180_page(trade_date, cts, page_up, page_records, next_cts, next_has_more, fatal_error, page_error)) {
                 page_success = true;
                 break;
             }
@@ -434,14 +436,23 @@ bool QVQuery::fetch_executions(const std::string& trade_date,
             logger_.warn("s8180 page fetch failed. attempt=" + std::to_string(attempt + 1));
             if (fatal_error) {
                 logger_.error("s8180 page fetch failed with fatal error. no retry.");
+                if (!page_error.empty()) {
+                    warnings.push_back(page_error);
+                }
                 return false;
             }
             if (!is_retryable_failure(attempt, kMaxAttempts)) {
+                if (!page_error.empty()) {
+                    warnings.push_back(page_error);
+                }
                 return false;
             }
         }
 
         if (!page_success) {
+            if (!page_error.empty()) {
+                warnings.push_back(page_error);
+            }
             return false;
         }
 
@@ -497,8 +508,10 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
                                std::vector<ExecutionRecord>& page_out,
                                std::string& next_cts,
                                bool& has_more,
-                               bool& fatal_error) {
+                               bool& fatal_error,
+                               std::string& page_error) {
     if (auth_.is_mock_mode()) {
+        (void)page_error;
         return fill_mock_s8180(trade_date, cts, page_out, next_cts, has_more);
     }
 
@@ -517,14 +530,21 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
     next_cts.clear();
     has_more = false;
     fatal_error = false;
+    page_error.clear();
 
     const std::string tr_code = env_or_default("QV_EXEC_TR_CODE", "s8180");
-    const int tr_index = cts.empty() ? 818000 : 818001;
+    const int tr_index = next_exec_tr_index_++;
+    auth_.discard_stale_query_events("before s8180 tr_index=" + std::to_string(tr_index));
 
     Ts8180InBlock input{};
     set_fixed_field(input.inq_gubunz1, env_or_default("QV_INQ_GUBUN", "3"));
     const std::string account_password =
         auth_.account_password().empty() ? env_or_empty("QV_ACCOUNT_PASSWORD") : auth_.account_password();
+    logger_.info(
+        "s8180 password validation account_index=" + std::to_string(auth_.account_index()) +
+        " account_no=" + auth_.account_no() +
+        " password_length=" + std::to_string(account_password.size()) +
+        " is_digit_4=" + std::string(is_digit_4_password(account_password) ? "Y" : "N"));
     set_fixed_field(input.pswd_noz44, account_password);
     set_fixed_field(input.group_noz4, env_or_default("QV_GROUP_NO", "0000"));
     set_fixed_field(input.mkt_slctz1, env_or_default("QV_MKT_SLCT", "0"));
@@ -569,6 +589,8 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
             std::chrono::steady_clock::now() - start);
         if (elapsed.count() >= timeout_ms) {
             logger_.error("s8180 query timeout");
+            page_error = "TR 조회 타임아웃";
+            auth_.drain_events_for_tr(tr_index, 500, "s8180 timeout");
             return false;
         }
 
@@ -579,6 +601,8 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
                 continue;
             }
             logger_.error("wait_for_event failed: " + wait_error);
+            page_error = "이벤트 대기 실패";
+            auth_.drain_events_for_tr(tr_index, 500, "s8180 wait_for_event failed");
             return false;
         }
 
@@ -595,9 +619,11 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
                 const std::string code = trim(cp949_to_utf8(header->message_code, static_cast<int>(sizeof(header->message_code))));
                 const std::string msg = trim(cp949_to_utf8(header->message, static_cast<int>(sizeof(header->message))));
                 logger_.info("s8180 message [" + code + "] " + msg);
-                if (code == "10009" || msg.find("계좌비밀번호") != std::string::npos) {
+                if (code == "10009" || code == "21263" || msg.find("계좌비밀번호") != std::string::npos) {
                     logger_.error("s8180 account password rejected: " + msg);
                     fatal_error = true;
+                    page_error = "계좌 비밀번호 오류";
+                    auth_.drain_events_for_tr(tr_index, 1000, "s8180 account password rejected");
                     return false;
                 }
             }
@@ -611,6 +637,10 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
                 logger_.error("s8180 receive error");
             }
             fatal_error = true;
+            if (page_error.empty()) {
+                page_error = "TR 수신 오류";
+            }
+            auth_.drain_events_for_tr(tr_index, 1000, "s8180 receive error");
             return false;
         }
 
@@ -745,7 +775,8 @@ bool QVQuery::fetch_s8118_details(const std::string& trade_date,
     details.clear();
 
     const std::string tr_code = env_or_default("QV_SPLIT_TR_CODE", "s8118");
-    const int tr_index = 811800;
+    const int tr_index = next_split_tr_index_++;
+    auth_.discard_stale_query_events("before s8118 tr_index=" + std::to_string(tr_index));
 
     Ts8118InBlock input{};
     set_fixed_field(input.order_datez8, trade_date);
@@ -778,6 +809,7 @@ bool QVQuery::fetch_s8118_details(const std::string& trade_date,
             std::chrono::steady_clock::now() - start);
         if (elapsed.count() >= timeout_ms) {
             logger_.warn("s8118 timeout for order_no=" + order_no);
+            auth_.drain_events_for_tr(tr_index, 500, "s8118 timeout");
             return false;
         }
 
@@ -788,6 +820,7 @@ bool QVQuery::fetch_s8118_details(const std::string& trade_date,
                 continue;
             }
             logger_.warn("s8118 wait_for_event failed: " + wait_error);
+            auth_.drain_events_for_tr(tr_index, 500, "s8118 wait_for_event failed");
             return false;
         }
 
@@ -812,6 +845,7 @@ bool QVQuery::fetch_s8118_details(const std::string& trade_date,
             if (event.tr_index == tr_index && !event.data.empty()) {
                 logger_.warn("s8118 error: " + cstr_cp949(event.data.data()));
             }
+            auth_.drain_events_for_tr(tr_index, 500, "s8118 receive error");
             return false;
         }
 

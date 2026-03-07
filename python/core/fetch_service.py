@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 from dataclasses import dataclass, field
@@ -8,6 +9,8 @@ from pathlib import Path
 from typing import Iterable
 
 from core.runtime_paths import AppPaths
+
+logger = logging.getLogger(__name__)
 
 
 class FetchError(RuntimeError):
@@ -107,6 +110,16 @@ class FetchService:
     @staticmethod
     def _creationflags() -> int:
         return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+    @staticmethod
+    def _validate_selection(item: AccountSelection) -> None:
+        password = item.account_password.strip()
+        if len(password) != 4 or not password.isdigit():
+            raise FetchError(f"{item.account_no}: 계좌 비밀번호는 4자리 숫자여야 합니다.")
+        if any(ch in item.account_no for ch in ("\t", "\r", "\n")):
+            raise FetchError(f"{item.account_no}: 계좌번호 형식이 올바르지 않습니다.")
+        if any(ch in password for ch in ("\t", "\r", "\n")):
+            raise FetchError(f"{item.account_no}: 계좌 비밀번호 형식이 올바르지 않습니다.")
 
     @staticmethod
     def _parse_accounts_payload(payload: dict) -> list[AccountInfo]:
@@ -232,6 +245,8 @@ class FetchService:
         selected = list(selections)
         if not selected:
             raise FetchError("조회할 계좌가 선택되지 않았습니다.")
+        for item in selected:
+            self._validate_selection(item)
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         log_path = self.default_log_path(date_compact)
@@ -320,6 +335,15 @@ class FetchService:
             raise FetchError("조회할 계좌가 선택되지 않았습니다.")
         if self._session_proc is None:
             raise FetchError("로그인 세션이 없습니다. 다시 로그인하세요.")
+        for item in selected:
+            self._validate_selection(item)
+            logger.info(
+                "Session QUERY send account_index=%s account_no=%s password_length=%s is_digit_4=%s",
+                item.account_index,
+                item.account_no,
+                len(item.account_password.strip()),
+                "Y" if item.account_password.strip().isdigit() and len(item.account_password.strip()) == 4 else "N",
+            )
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         lines = [

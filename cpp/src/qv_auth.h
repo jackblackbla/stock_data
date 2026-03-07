@@ -39,6 +39,8 @@ public:
                       int input_size) const;
     bool wait_for_event(QVEvent& event, int timeout_ms, std::string& error_message) const;
     bool set_active_account(int account_index, const std::string& account_password, std::string& error_message);
+    int discard_stale_query_events(const std::string& reason) const;
+    int drain_events_for_tr(int tr_index, int timeout_ms, const std::string& reason) const;
 
     std::string account_no() const;
     int account_index() const;

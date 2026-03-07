@@ -42,6 +42,15 @@ std::string env_or_empty(const char* key) {
     return input.substr(start, end - start);
 }
 
+bool is_digit_4_password(const std::string& value) {
+    if (value.size() != 4) {
+        return false;
+    }
+    return std::all_of(value.begin(), value.end(), [](unsigned char c) {
+        return std::isdigit(c) != 0;
+    });
+}
+
 #ifdef _WIN32
 std::string to_hex_u32(std::uint32_t value) {
     std::ostringstream oss;
@@ -423,6 +432,10 @@ struct QVEventEntry {
 
 std::vector<QVEventEntry> g_event_queue;
 
+bool is_connection_event(std::uint32_t code) {
+    return code == CA_CONNECTED || code == CA_DISCONNECTED || code == CA_SOCKETERROR;
+}
+
 // SEH wrapper: must be in a function with no C++ objects that need unwinding
 struct CopyResult {
     int tr_index;
@@ -792,8 +805,8 @@ bool QVAuth::wait_for_event(QVEvent& event, int timeout_ms, std::string& error_m
 }
 
 bool QVAuth::set_active_account(int account_index, const std::string& account_password, std::string& error_message) {
-    if (account_password.empty()) {
-        error_message = "account password is empty";
+    if (!is_digit_4_password(account_password)) {
+        error_message = "account password must be 4 digits";
         return false;
     }
 
@@ -804,6 +817,11 @@ bool QVAuth::set_active_account(int account_index, const std::string& account_pa
         if (account_no_.empty()) {
             account_no_ = "0000000000";
         }
+        logger_.info(
+            "Activated account account_index=" + std::to_string(account_index_) +
+            " account_no=" + account_no_ +
+            " password_length=" + std::to_string(account_password_.size()) +
+            " is_digit_4=" + std::string(is_digit_4_password(account_password_) ? "Y" : "N"));
         return true;
     }
 
@@ -817,7 +835,96 @@ bool QVAuth::set_active_account(int account_index, const std::string& account_pa
 
     account_index_ = it->account_index;
     account_no_ = it->account_no;
+    logger_.info(
+        "Activated account account_index=" + std::to_string(account_index_) +
+        " account_no=" + account_no_ +
+        " password_length=" + std::to_string(account_password_.size()) +
+        " is_digit_4=" + std::string(is_digit_4_password(account_password_) ? "Y" : "N"));
     return true;
+}
+
+int QVAuth::discard_stale_query_events(const std::string& reason) const {
+#ifdef _WIN32
+    MSG msg{};
+    while (PeekMessageA(&msg, nullptr, 0, 0, PM_REMOVE) != 0) {
+        TranslateMessage(&msg);
+        DispatchMessageA(&msg);
+    }
+
+    int removed = 0;
+    auto it = g_event_queue.begin();
+    while (it != g_event_queue.end()) {
+        if (is_connection_event(it->code)) {
+            ++it;
+            continue;
+        }
+        it = g_event_queue.erase(it);
+        ++removed;
+    }
+    if (removed > 0) {
+        logger_.warn("Discarded stale query events count=" + std::to_string(removed) + " reason=" + reason);
+    }
+    return removed;
+#else
+    (void)reason;
+    return 0;
+#endif
+}
+
+int QVAuth::drain_events_for_tr(int tr_index, int timeout_ms, const std::string& reason) const {
+#ifdef _WIN32
+    const auto start = std::chrono::steady_clock::now();
+    int removed = 0;
+    bool saw_terminal = false;
+
+    while (true) {
+        MSG msg{};
+        while (PeekMessageA(&msg, nullptr, 0, 0, PM_REMOVE) != 0) {
+            TranslateMessage(&msg);
+            DispatchMessageA(&msg);
+        }
+
+        bool removed_any = false;
+        auto it = g_event_queue.begin();
+        while (it != g_event_queue.end()) {
+            if (it->tr_index != tr_index || is_connection_event(it->code)) {
+                ++it;
+                continue;
+            }
+            if (it->code == CA_RECEIVECOMPLETE || it->code == CA_RECEIVEERROR) {
+                saw_terminal = true;
+            }
+            it = g_event_queue.erase(it);
+            ++removed;
+            removed_any = true;
+        }
+
+        if (saw_terminal && !removed_any) {
+            break;
+        }
+
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start);
+        if (elapsed.count() >= timeout_ms) {
+            break;
+        }
+
+        Sleep(10);
+    }
+
+    if (removed > 0) {
+        logger_.warn(
+            "Drained query events tr_index=" + std::to_string(tr_index) +
+            " count=" + std::to_string(removed) +
+            " reason=" + reason);
+    }
+    return removed;
+#else
+    (void)tr_index;
+    (void)timeout_ms;
+    (void)reason;
+    return 0;
+#endif
 }
 
 std::string QVAuth::account_no() const {
