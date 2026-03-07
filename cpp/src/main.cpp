@@ -120,6 +120,7 @@ int main(int argc, char* argv[]) {
 
         Logger logger(args.log);
         logger.info("fetch.exe started for trade date: " + args.date);
+        logger.info(std::string("fetch.exe build: ") + __DATE__ + " " + __TIME__);
 #ifdef _WIN32
         g_crash_logger = &logger;
         SetUnhandledExceptionFilter(log_unhandled_exception);

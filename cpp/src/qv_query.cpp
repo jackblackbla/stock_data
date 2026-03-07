@@ -394,7 +394,16 @@ std::string map_s8180_market(const Ts8180OutBlock1& row) {
 #endif
 }  // namespace
 
-QVQuery::QVQuery(QVAuth& auth, Logger& logger) : auth_(auth), logger_(logger) {}
+QVQuery::QVQuery(QVAuth& auth, Logger& logger) : auth_(auth), logger_(logger) {
+#ifdef _WIN32
+    logger_.info(
+        "TR struct sizes s8180_in=" + std::to_string(sizeof(Ts8180InBlock)) +
+        " s8180_out1=" + std::to_string(sizeof(Ts8180OutBlock1)) +
+        " s8180_paging=" + std::to_string(sizeof(Ts8180OutBlockIN)) +
+        " s8118_in=" + std::to_string(sizeof(Ts8118InBlock)) +
+        " s8118_out=" + std::to_string(sizeof(Ts8118OutBlock)));
+#endif
+}
 
 bool QVQuery::fetch_executions(const std::string& trade_date,
                                std::vector<ExecutionRecord>& out,
