@@ -271,6 +271,10 @@ class MainWindow(QMainWindow):
         except FetchError as exc:
             QMessageBox.critical(self, "로그인 실패", str(exc))
             return False
+        except Exception as exc:  # noqa: BLE001
+            self.fetch_service.close_session(force=True)
+            QMessageBox.critical(self, "로그인 실패", f"세션 응답 처리 중 오류가 발생했습니다.\n{exc}")
+            return False
 
         selection_dialog = AccountSelectionDialog(
             accounts=accounts,

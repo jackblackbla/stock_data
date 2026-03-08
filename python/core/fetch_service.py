@@ -195,6 +195,8 @@ class FetchService:
             cwd=self.app_root,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             creationflags=self._creationflags(),
             env=self._base_env(credentials, require_account_password=False),
         )
@@ -241,6 +243,8 @@ class FetchService:
                 cwd=self.app_root,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 creationflags=self._creationflags(),
                 env=self._base_env(credentials, account_index, account_password),
             )
@@ -250,6 +254,8 @@ class FetchService:
                 cwd=self.app_root,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 creationflags=self._creationflags(),
             )
         if proc.returncode != 0:
@@ -299,6 +305,8 @@ class FetchService:
             cwd=self.app_root,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             creationflags=self._creationflags(),
             env=self._base_env(
                 credentials=credentials,
@@ -338,6 +346,8 @@ class FetchService:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
             creationflags=self._creationflags(),
         )
