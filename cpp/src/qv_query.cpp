@@ -663,7 +663,7 @@ static_assert(sizeof(Ts8180OutBlockIN) == 57, "Ts8180OutBlockIN size mismatch");
 static_assert(sizeof(Ts8118InBlock) == 106, "Ts8118InBlock size mismatch");
 static_assert(sizeof(Ts8118OutBlock) == 207, "Ts8118OutBlock size mismatch");
 static_assert(sizeof(Tc8201InBlock) == 49, "Tc8201InBlock size mismatch");
-static_assert(sizeof(Tc8201OutBlock) == 479, "Tc8201OutBlock size mismatch");
+static_assert(sizeof(Tc8201OutBlock) == 495, "Tc8201OutBlock size mismatch");
 static_assert(sizeof(Tc8201OutBlock1) == 235, "Tc8201OutBlock1 size mismatch");
 
 std::string map_s8180_market(const Ts8180OutBlock1& row) {
