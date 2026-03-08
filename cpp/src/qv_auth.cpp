@@ -578,6 +578,7 @@ QVAuth::~QVAuth() {
     wmca_connect_ = nullptr;
     wmca_query_ = nullptr;
     wmca_set_account_pwd_ = nullptr;
+    wmca_set_order_pwd_ = nullptr;
     wmca_set_account_no_pwd_ = nullptr;
     wmca_set_account_no_by_index_ = nullptr;
     dll_handle_ = nullptr;
@@ -971,6 +972,45 @@ bool QVAuth::fill_account_password_hash(char* out,
 #endif
 }
 
+bool QVAuth::fill_trade_password_hash(char* out,
+                                      std::size_t out_size,
+                                      const std::string& trade_password,
+                                      std::string& error_message) const {
+#ifdef _WIN32
+    error_message.clear();
+    if (out == nullptr || out_size < 44) {
+        error_message = "trade password hash output buffer is too small";
+        return false;
+    }
+    if (trade_password.empty()) {
+        error_message = "trade password is empty";
+        return false;
+    }
+    if (wmca_set_order_pwd_ == nullptr) {
+        error_message = "wmcaSetOrderPwd not available";
+        return false;
+    }
+
+    std::memset(out, ' ', out_size);
+    const int ret = wmca_set_order_pwd_(out, trade_password.c_str());
+    logger_.info(
+        "wmcaSetOrderPwd password_length=" + std::to_string(trade_password.size()) +
+        " ret=" + std::to_string(ret) +
+        " fixed_len=44");
+    if (ret == 0) {
+        error_message = "wmcaSetOrderPwd returned 0";
+        return false;
+    }
+    return true;
+#else
+    (void)out;
+    (void)out_size;
+    (void)trade_password;
+    error_message = "not supported on non-Windows";
+    return false;
+#endif
+}
+
 std::string QVAuth::get_encrypted_password(int account_index) const {
     (void)account_index;
     if (!encrypted_password_.empty()) {
@@ -978,6 +1018,18 @@ std::string QVAuth::get_encrypted_password(int account_index) const {
     }
     logger_.warn("No encrypted password available — returning plain password");
     return account_password_;
+}
+
+void QVAuth::configure_trade_passwords(const std::string& trade_password,
+                                       const std::string& trade_password1,
+                                       const std::string& trade_password2) {
+    trade_password_ = trim(trade_password);
+    trade_password1_ = trim(trade_password1);
+    trade_password2_ = trim(trade_password2);
+    logger_.info(
+        "Configured trade passwords common_length=" + std::to_string(trade_password_.size()) +
+        " pw1_length=" + std::to_string(trade_password1_.size()) +
+        " pw2_length=" + std::to_string(trade_password2_.size()));
 }
 
 int QVAuth::discard_stale_query_events(const std::string& reason) const {
@@ -1074,6 +1126,18 @@ int QVAuth::account_index() const {
 
 const std::string& QVAuth::account_password() const {
     return account_password_;
+}
+
+const std::string& QVAuth::trade_password() const {
+    return trade_password_;
+}
+
+const std::string& QVAuth::trade_password1() const {
+    return trade_password1_;
+}
+
+const std::string& QVAuth::trade_password2() const {
+    return trade_password2_;
 }
 
 const std::vector<QVAccount>& QVAuth::accounts() const {
@@ -1188,6 +1252,7 @@ bool QVAuth::resolve_symbols() {
         }
     };
     load_optional("wmcaSetAccountIndexPwd", wmca_set_account_pwd_);
+    load_optional("wmcaSetOrderPwd", wmca_set_order_pwd_);
     load_optional("wmcaSetAccountNoPwd", wmca_set_account_no_pwd_);
     load_optional("wmcaSetAccountNoByIndex", wmca_set_account_no_by_index_);
 

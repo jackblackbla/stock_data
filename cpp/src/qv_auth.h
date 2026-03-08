@@ -55,11 +55,21 @@ public:
                                     std::size_t out_size,
                                     bool use_account_no,
                                     std::string& error_message) const;
+    bool fill_trade_password_hash(char* out,
+                                  std::size_t out_size,
+                                  const std::string& trade_password,
+                                  std::string& error_message) const;
     std::string get_encrypted_password(int account_index) const;
+    void configure_trade_passwords(const std::string& trade_password,
+                                   const std::string& trade_password1 = "",
+                                   const std::string& trade_password2 = "");
 
     std::string account_no() const;
     int account_index() const;
     const std::string& account_password() const;
+    const std::string& trade_password() const;
+    const std::string& trade_password1() const;
+    const std::string& trade_password2() const;
     const std::vector<QVAccount>& accounts() const;
     const QVAccount& active_account() const;
     bool is_mock_mode() const;
@@ -69,6 +79,9 @@ private:
     std::string account_no_;
     std::string account_password_;
     std::string encrypted_password_;
+    std::string trade_password_;
+    std::string trade_password1_;
+    std::string trade_password2_;
     int account_index_ = 1;
     std::vector<QVAccount> accounts_;
     QVAccount active_account_;
@@ -82,6 +95,8 @@ private:
     using WmcaQuery = int(__stdcall*)(void*, int, const char*, const char*, int, int);
     // BOOL __stdcall wmcaSetAccountIndexPwd(const char* pszHashOut, int nAccountIndex, const char* pszPassword)
     using WmcaSetAccountIndexPwd = int(__stdcall*)(char*, int, const char*);
+    // BOOL __stdcall wmcaSetOrderPwd(const char* pszHashOut, const char* pszPassword)
+    using WmcaSetOrderPwd = int(__stdcall*)(char*, const char*);
     // BOOL __stdcall wmcaSetAccountNoPwd(const char* pszHashOut, const char* pszAccountNo, const char* pszPassword)
     using WmcaSetAccountNoPwd = int(__stdcall*)(char*, const char*, const char*);
     // BOOL __stdcall wmcaSetAccountNoByIndex(const char* pszHashOut, int nAccountIndex)
@@ -95,6 +110,7 @@ private:
     WmcaDisconnect wmca_disconnect_ = nullptr;
     WmcaQuery wmca_query_ = nullptr;
     WmcaSetAccountIndexPwd wmca_set_account_pwd_ = nullptr;
+    WmcaSetOrderPwd wmca_set_order_pwd_ = nullptr;
     WmcaSetAccountNoPwd wmca_set_account_no_pwd_ = nullptr;
     WmcaSetAccountNoByIndex wmca_set_account_no_by_index_ = nullptr;
 

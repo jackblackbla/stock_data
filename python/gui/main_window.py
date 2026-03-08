@@ -19,6 +19,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from core.balance_loader import load_balance_json, parse_balance_accounts
 from core.data_loader import load_fetch_json, merge_reasons, parse_trade_date, parse_trades
 from core.excel_generator import generate_excel
 from core.fetch_service import FetchError, FetchService, LoginCredentials
@@ -26,6 +27,7 @@ from core.models import TradeRecord
 from core.reason_store import ReasonStore
 from core.runtime_paths import AppPaths
 from gui.account_selection_dialog import AccountSelectionDialog
+from gui.balance_dialog import BalanceDialog
 from gui.login_dialog import LoginCredentialsDialog
 from gui.reason_delegate import ReasonDelegate
 from gui.trade_tree_model import TradeTreeModel
@@ -47,10 +49,12 @@ class MainWindow(QMainWindow):
         self.startup_warnings = startup_warnings or []
         self.session_credentials: LoginCredentials | None = None
         self.session_account_passwords: dict[str, str] = {}
+        self.session_trade_password = ""
         self.remember_login_session = True
         self.remember_account_session = True
         self.active_credentials: LoginCredentials | None = None
         self.active_selections = []
+        self.active_trade_password = ""
         self._initial_json_supplied = initial_json is not None
 
         self.setWindowTitle("NH 매매일지 자동화")
@@ -79,6 +83,7 @@ class MainWindow(QMainWindow):
 
         self.btn_login = QPushButton("로그인 변경")
         self.btn_fetch = QPushButton("조회")
+        self.btn_balance = QPushButton("잔고조회")
         self.btn_excel = QPushButton("엑셀 생성")
         self.btn_open = QPushButton("열기")
 
@@ -87,6 +92,7 @@ class MainWindow(QMainWindow):
         top.addWidget(self.date_edit)
         top.addWidget(self.btn_login)
         top.addWidget(self.btn_fetch)
+        top.addWidget(self.btn_balance)
         top.addWidget(self.btn_excel)
         top.addWidget(self.btn_open)
         top.addStretch(1)
@@ -101,6 +107,7 @@ class MainWindow(QMainWindow):
 
         self.btn_login.clicked.connect(self.on_login_clicked)
         self.btn_fetch.clicked.connect(self.on_fetch_clicked)
+        self.btn_balance.clicked.connect(self.on_balance_clicked)
         self.btn_excel.clicked.connect(self.on_excel_clicked)
         self.btn_open.clicked.connect(self.on_open_clicked)
 
@@ -119,19 +126,50 @@ class MainWindow(QMainWindow):
     def current_json_path(self) -> Path:
         return self.paths.json_dir / f"{self.current_trade_date_compact()}.json"
 
+    def current_balance_json_path(self) -> Path:
+        return self.fetch_service.default_balance_json_path()
+
     def on_fetch_clicked(self) -> None:
         try:
             if not self._ensure_session():
+                return
+            if not self.active_trade_password:
+                QMessageBox.warning(self, "거래 비밀번호", "조회 실행 전 거래 비밀번호를 입력하세요.")
                 return
 
             json_path = self.fetch_service.run_multi_session(
                 self.current_trade_date_compact(),
                 self.current_json_path(),
                 self.active_selections,
+                self.active_trade_password,
             )
             self.load_from_json(json_path)
         except FetchError as exc:
             QMessageBox.critical(self, "조회 실패", str(exc))
+
+    def on_balance_clicked(self) -> None:
+        try:
+            if not self._ensure_session():
+                return
+
+            json_path = self.fetch_service.run_balance_session(
+                self.current_balance_json_path(),
+                self.active_selections,
+            )
+            payload = load_balance_json(json_path)
+            results = parse_balance_accounts(payload)
+            errors = [str(item).strip() for item in payload.get("errors", []) if str(item).strip()]
+            if errors:
+                QMessageBox.warning(self, "잔고조회 경고", "\n".join(errors))
+            if not results:
+                QMessageBox.information(self, "잔고조회", "잔고조회 결과가 없습니다.")
+                return
+            dialog = BalanceDialog(results, self)
+            dialog.exec_()
+        except FetchError as exc:
+            QMessageBox.critical(self, "잔고조회 실패", str(exc))
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "잔고조회 실패", f"잔고조회 결과 처리 중 오류가 발생했습니다.\n{exc}")
 
     def on_login_clicked(self) -> None:
         if self._ensure_session(force=True):
@@ -261,6 +299,7 @@ class MainWindow(QMainWindow):
             self.fetch_service.close_session()
             self.active_credentials = None
             self.active_selections = []
+            self.active_trade_password = ""
 
         credentials = self._prompt_login_credentials()
         if credentials is None:
@@ -279,31 +318,39 @@ class MainWindow(QMainWindow):
         selection_dialog = AccountSelectionDialog(
             accounts=accounts,
             remembered_passwords=self.session_account_passwords,
+            remembered_trade_password=self.session_trade_password,
             remember_checked=self.remember_account_session,
             parent=self,
         )
         if selection_dialog.exec_() != selection_dialog.Accepted:
             self.fetch_service.close_session()
+            self.active_trade_password = ""
             return False
 
         selections = selection_dialog.selected_accounts()
+        trade_password = selection_dialog.trade_password()
         self.active_credentials = credentials
         self.active_selections = selections
+        self.active_trade_password = trade_password
         self.remember_account_session = selection_dialog.remember_session()
         if self.remember_account_session:
             self.session_account_passwords = {
                 item.account_no: item.account_password for item in selections if item.account_password
             }
+            self.session_trade_password = trade_password
         else:
             self.session_account_passwords = {}
+            self.session_trade_password = ""
         return True
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self.fetch_service.close_session()
         self.active_credentials = None
         self.active_selections = []
+        self.active_trade_password = ""
         self.session_credentials = None
         self.session_account_passwords = {}
+        self.session_trade_password = ""
         super().closeEvent(event)
 
     @staticmethod

@@ -26,6 +26,13 @@ NH투자증권 QV Open API 체결 데이터를 조회하고, 매매 근거를 �
 
 `order_no`는 전 구간 10자리 문자열(`0` padding) 기준입니다.
 
+잔고조회 JSON은 별도 파일(`data/json/balance_latest.json`)로 저장되며 아래 루트 필드를 사용합니다.
+- `schema_version`
+- `generated_at`
+- `status`
+- `errors[]`
+- `balance_accounts[]`
+
 ## C++ fetch 빌드 (Windows x86)
 1. Visual Studio에서 x86 툴체인 사용
 2. `cmake -S cpp -B cpp/build -A Win32`
@@ -33,6 +40,7 @@ NH투자증권 QV Open API 체결 데이터를 조회하고, 매매 근거를 �
 
 CLI:
 - `fetch.exe --date YYYYMMDD --output <json_path> [--log <log_path>]`
+- `fetch.exe --session [--log <log_path>]`
 
 종료코드:
 - `0`: 성공
@@ -59,19 +67,54 @@ CLI:
 
 다이얼로그를 사용할 수 없는 경우에만 콘솔 입력으로 fallback 합니다.
 
+## 비밀번호 모델
+- `QV_PASSWORD`: QV 로그인 비밀번호
+- `QV_CERT_PASSWORD`: 인증서 비밀번호
+- `QV_ACCOUNT_PASSWORD`: 계좌비밀번호. 계좌별 4자리 숫자이며 `c8201`, `s8180`의 계좌 비밀번호 해시에 사용
+- `QV_TRADE_PASSWORD`: 거래비밀번호. 세션 공통 입력값이며 `s8180`, `s8118`의 `trad_pswd1/2` 해시에 사용
+
+GUI에서는 계좌선택 창에서 계좌비밀번호와 거래비밀번호를 분리해서 입력합니다.
+거래비밀번호는 메모리에만 유지되며 파일/DB에 저장하지 않습니다.
+
 ## TR 설정 환경변수
 - `QV_EXEC_TR_CODE` (기본 `s8180`): 체결 조회 TR 코드
 - `QV_SPLIT_TR_CODE` (기본 `s8118`): 분할체결 상세 TR 코드
+- `QV_BALANCE_TR_CODE` (기본 `c8201`): 잔고 조회 TR 코드
 - `QV_QUERY_TIMEOUT_MS` (기본 `15000`)
-- `QV_TRADE_PASSWORD1`, `QV_TRADE_PASSWORD2` (선택): TR 입력 거래비밀번호
-- `QV_ACCOUNT_PASSWORD` (선택): s8180 입력 계좌 비밀번호
+- `QV_TRADE_PASSWORD` (선택): 공통 거래비밀번호. `trad_pswd1/2` 모두에 동일 해시를 넣을 때 사용
+- `QV_TRADE_PASSWORD1`, `QV_TRADE_PASSWORD2` (선택): `QV_TRADE_PASSWORD`보다 우선하는 개별 거래비밀번호 override
+- `QV_ACCOUNT_PASSWORD` (선택): `c8201`/`s8180` 입력 계좌 비밀번호
 - `QV_S8180_PASSWORD_MODE` (기본 `encrypted`): `s8180`의 `pswd_noz44` 주입 방식. 실험용으로 `plain`, `blank`도 지원
 - `QV_ACCOUNT_PASSWORD_HASH_BINDING` (기본 `auto_probe`): `encrypted` 모드에서 계좌 비밀번호 해시를 어떤 기준으로 만들지 선택. 기본값은 `index`로 먼저 시도하고 `21263`일 때만 `account_no`를 1회 추가 시도
 
-기본 구현은 문서 기준 `s8180` 체결조회 + `s8118` 분할체결 상세 구조체 파서를 사용합니다.
+기본 구현은 문서 기준 `c8201` 잔고조회 + `s8180` 체결조회 + `s8118` 분할체결 상세 구조체 파서를 사용합니다.
 
 s8180 페이징은 `CTS + ISPAGEUP(\"N\")` 로직을 사용합니다.
 `SOR시장분할여부 == Y`인 주문에 대해 s8118을 호출하고, 체결단가는 `체결금액 / 체결수량`으로 역산합니다.
+`s8180`/`s8118`의 `trad_pswd1/2`는 `wmcaSetOrderPwd`로 해시한 뒤 전송합니다.
+
+## 세션 프로토콜
+`fetch.exe --session`은 아래 명령을 지원합니다.
+
+- `LOGIN`
+  - `LOGIN`
+  - `user_id`
+  - `password`
+  - `cert_password`
+- `QUERY`
+  - `QUERY`
+  - `YYYYMMDD`
+  - `output_path`
+  - `trade_password`
+  - `selected_count`
+  - `<account_index>\t<account_no>\t<account_password>` 반복
+- `BALANCE`
+  - `BALANCE`
+  - `output_path`
+  - `selected_count`
+  - `<account_index>\t<account_no>\t<account_password>` 반복
+
+`QUERY`는 구포맷(4번째 줄이 `selected_count`)도 계속 허용합니다.
 
 ## Python 실행
 1. x86 Python 3 설치
@@ -81,6 +124,10 @@ s8180 페이징은 `CTS + ISPAGEUP(\"N\")` 로직을 사용합니다.
    - `python python/main.py`
 4. 자동 모드
    - `python python/main.py --auto`
+
+GUI 버튼 동작:
+- `조회`: `s8180`/`s8118` 체결조회. 거래비밀번호가 없으면 실행하지 않음
+- `잔고조회`: `c8201` 잔고조회. 거래비밀번호 없이 실행 가능
 
 ## 자동 모드 동작
 1. fetch 실행(JSON 생성)

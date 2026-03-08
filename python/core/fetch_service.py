@@ -88,6 +88,9 @@ class FetchService:
     def default_accounts_path(self) -> Path:
         return self.paths.json_dir / "accounts.json"
 
+    def default_balance_json_path(self) -> Path:
+        return self.paths.json_dir / "balance_latest.json"
+
     def session_log_path(self) -> Path:
         return self.paths.logs_dir / "fetch_session.log"
 
@@ -97,12 +100,14 @@ class FetchService:
         account_index: int | None = None,
         account_password: str | None = None,
         batch_accounts: Iterable[AccountSelection] | None = None,
+        trade_password: str | None = None,
         require_account_password: bool = True,
     ) -> dict[str, str]:
         env = os.environ.copy()
         env.pop("QV_ACCOUNT_INDEX", None)
         env.pop("QV_ACCOUNT_PASSWORD", None)
         env.pop("QV_BATCH_ACCOUNTS", None)
+        env.pop("QV_TRADE_PASSWORD", None)
         env.pop("QV_REQUIRE_ACCOUNT_PASSWORD", None)
         if credentials is not None:
             env["QV_ID"] = credentials.user_id
@@ -117,6 +122,8 @@ class FetchService:
             for item in batch_accounts:
                 encoded_accounts.append(f"{item.account_index}|{item.account_no}|{item.account_password}")
             env["QV_BATCH_ACCOUNTS"] = ";".join(encoded_accounts)
+        if trade_password is not None:
+            env["QV_TRADE_PASSWORD"] = trade_password
         if not require_account_password:
             env["QV_REQUIRE_ACCOUNT_PASSWORD"] = "0"
         return env
@@ -134,6 +141,11 @@ class FetchService:
             raise FetchError(f"{item.account_no}: 계좌번호 형식이 올바르지 않습니다.")
         if any(ch in password for ch in ("\t", "\r", "\n")):
             raise FetchError(f"{item.account_no}: 계좌 비밀번호 형식이 올바르지 않습니다.")
+
+    @staticmethod
+    def _validate_trade_password(trade_password: str) -> None:
+        if any(ch in trade_password for ch in ("\t", "\r", "\n")):
+            raise FetchError("거래 비밀번호 형식이 올바르지 않습니다.")
 
     @staticmethod
     def _parse_accounts_payload(payload: dict) -> list[AccountInfo]:
@@ -218,6 +230,7 @@ class FetchService:
         credentials: LoginCredentials | None = None,
         account_index: int | None = None,
         account_password: str | None = None,
+        trade_password: str | None = None,
     ) -> Path:
         output = output_path or self.default_json_path(date_compact)
         log_path = self.default_log_path(date_compact)
@@ -237,7 +250,7 @@ class FetchService:
             str(log_path),
         ]
 
-        if credentials is not None or account_index is not None or account_password is not None:
+        if credentials is not None or account_index is not None or account_password is not None or trade_password is not None:
             proc = subprocess.run(
                 cmd,
                 cwd=self.app_root,
@@ -246,7 +259,7 @@ class FetchService:
                 encoding="utf-8",
                 errors="replace",
                 creationflags=self._creationflags(),
-                env=self._base_env(credentials, account_index, account_password),
+                env=self._base_env(credentials, account_index, account_password, trade_password=trade_password),
             )
         else:
             proc = subprocess.run(
@@ -277,12 +290,15 @@ class FetchService:
         output_path: Path,
         credentials: LoginCredentials,
         selections: Iterable[AccountSelection],
+        trade_password: str | None = None,
     ) -> Path:
         selected = list(selections)
         if not selected:
             raise FetchError("조회할 계좌가 선택되지 않았습니다.")
         for item in selected:
             self._validate_selection(item)
+        if trade_password is not None:
+            self._validate_trade_password(trade_password)
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         log_path = self.default_log_path(date_compact)
@@ -311,6 +327,7 @@ class FetchService:
             env=self._base_env(
                 credentials=credentials,
                 batch_accounts=selected,
+                trade_password=trade_password,
                 require_account_password=False,
             ),
         )
@@ -369,12 +386,14 @@ class FetchService:
         date_compact: str,
         output_path: Path,
         selections: Iterable[AccountSelection],
+        trade_password: str,
     ) -> Path:
         selected = list(selections)
         if not selected:
             raise FetchError("조회할 계좌가 선택되지 않았습니다.")
         if self._session_proc is None:
             raise FetchError("로그인 세션이 없습니다. 다시 로그인하세요.")
+        self._validate_trade_password(trade_password)
         for item in selected:
             self._validate_selection(item)
             logger.info(
@@ -390,6 +409,7 @@ class FetchService:
             "QUERY",
             date_compact,
             str(output_path),
+            trade_password,
             str(len(selected)),
         ]
         for item in selected:
@@ -399,6 +419,42 @@ class FetchService:
         response_output = Path(str(payload.get("output") or output_path))
         if not response_output.exists():
             raise FetchError(f"fetch 성공 응답이지만 JSON 파일이 없습니다: {response_output}")
+        return response_output
+
+    def run_balance_session(
+        self,
+        output_path: Path | None,
+        selections: Iterable[AccountSelection],
+    ) -> Path:
+        selected = list(selections)
+        if not selected:
+            raise FetchError("잔고조회할 계좌가 선택되지 않았습니다.")
+        if self._session_proc is None:
+            raise FetchError("로그인 세션이 없습니다. 다시 로그인하세요.")
+        for item in selected:
+            self._validate_selection(item)
+            logger.info(
+                "Session BALANCE send account_index=%s account_no=%s password_length=%s is_digit_4=%s",
+                item.account_index,
+                item.account_no,
+                len(item.account_password.strip()),
+                "Y" if item.account_password.strip().isdigit() and len(item.account_password.strip()) == 4 else "N",
+            )
+
+        resolved_output = output_path or self.default_balance_json_path()
+        resolved_output.parent.mkdir(parents=True, exist_ok=True)
+        lines = [
+            "BALANCE",
+            str(resolved_output),
+            str(len(selected)),
+        ]
+        for item in selected:
+            lines.append(f"{item.account_index}\t{item.account_no}\t{item.account_password}")
+
+        payload = self._send_session_lines(lines)
+        response_output = Path(str(payload.get("output") or resolved_output))
+        if not response_output.exists():
+            raise FetchError(f"잔고조회 성공 응답이지만 JSON 파일이 없습니다: {response_output}")
         return response_output
 
     def close_session(self, force: bool = False) -> None:

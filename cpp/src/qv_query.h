@@ -13,6 +13,10 @@ struct S8180AttemptDiagnostic {
     std::string hash_source;
     std::string password_mode;
     bool hash_generation_ok = false;
+    bool trade_password_present = false;
+    int trade_password_length = 0;
+    bool trade_hash_generation_ok = false;
+    std::string trade_hash_source;
     bool query_submitted = false;
     bool query_succeeded = false;
     int tr_index = 0;
@@ -34,9 +38,13 @@ struct S8180Diagnostic {
     std::string binding_mode_requested;
     std::string password_mode;
     bool hash_generation_ok = false;
+    bool trade_password_present = false;
+    int trade_password_length = 0;
+    bool trade_hash_generation_ok = false;
     bool query_submitted = false;
     bool query_succeeded = false;
     std::string hash_source;
+    std::string trade_hash_source;
     std::string server_message_code;
     std::string server_message;
     std::string classification;
@@ -52,6 +60,7 @@ public:
     bool fetch_executions(const std::string& trade_date,
                           std::vector<ExecutionRecord>& out,
                           std::vector<std::string>& warnings);
+    bool fetch_balance(BalanceAccountResult& out, std::vector<std::string>& warnings);
     bool has_last_s8180_diagnostic() const;
     const S8180Diagnostic& last_s8180_diagnostic() const;
 
@@ -60,6 +69,7 @@ private:
     Logger& logger_;
     [[maybe_unused]] int next_exec_tr_index_ = 818000;
     [[maybe_unused]] int next_split_tr_index_ = 900000;
+    [[maybe_unused]] int next_balance_tr_index_ = 820100;
     S8180Diagnostic last_s8180_diagnostic_;
     bool has_last_s8180_diagnostic_ = false;
 
@@ -84,6 +94,8 @@ private:
 
     bool fill_mock_s8118(const std::string& order_no,
                          std::vector<SplitDetail>& details);
+
+    bool fill_mock_c8201(BalanceAccountResult& out);
 };
 
 #endif

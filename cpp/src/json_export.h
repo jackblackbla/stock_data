@@ -27,6 +27,11 @@ public:
                                                const std::string& trade_date,
                                                const std::vector<S8180Diagnostic>& diagnostics,
                                                Logger& logger);
+
+    static bool write_balance_atomic(const std::string& output_path,
+                                     const std::vector<BalanceAccountResult>& results,
+                                     const std::vector<std::string>& errors,
+                                     Logger& logger);
 };
 
 #endif

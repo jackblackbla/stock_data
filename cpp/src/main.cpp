@@ -111,6 +111,15 @@ bool is_digit_4_password(const std::string& value) {
     });
 }
 
+bool try_parse_int(const std::string& value, int& out) {
+    try {
+        out = std::stoi(trim(value));
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 std::vector<std::string> split(const std::string& input, char delimiter) {
     std::vector<std::string> out;
     std::size_t start = 0;
@@ -309,12 +318,18 @@ bool run_batch_query(QVAuth& auth,
                      Logger& logger,
                      const std::string& trade_date,
                      const std::string& output_path,
+                     const std::string& trade_password,
                      const std::vector<BatchAccountSelection>& batch_accounts,
                      std::string& error_message) {
     if (batch_accounts.empty()) {
         error_message = "no selected accounts";
         return false;
     }
+
+    auth.configure_trade_passwords(
+        trade_password,
+        trim(env_or_empty("QV_TRADE_PASSWORD1")),
+        trim(env_or_empty("QV_TRADE_PASSWORD2")));
 
     QVQuery query(auth, logger);
     std::vector<ExecutionRecord> executions;
@@ -346,7 +361,9 @@ bool run_batch_query(QVAuth& auth,
         queried_accounts.push_back(auth.active_account());
         logger.info(
             "Batch account query start account_index=" + std::to_string(auth.account_index()) +
-            " account_no=" + auth.account_no());
+            " account_no=" + auth.account_no() +
+            " trade_password_length=" + std::to_string(trade_password.size()) +
+            " has_trade_password=" + std::string(trade_password.empty() ? "N" : "Y"));
 
         std::vector<ExecutionRecord> per_account_executions;
         std::vector<std::string> per_account_warnings;
@@ -406,6 +423,72 @@ bool run_batch_query(QVAuth& auth,
     return true;
 }
 
+bool run_balance_query(QVAuth& auth,
+                       Logger& logger,
+                       const std::string& output_path,
+                       const std::vector<BatchAccountSelection>& batch_accounts,
+                       std::string& error_message) {
+    if (batch_accounts.empty()) {
+        error_message = "no selected accounts";
+        return false;
+    }
+
+    auth.configure_trade_passwords("", "", "");
+    QVQuery query(auth, logger);
+    std::vector<BalanceAccountResult> results;
+    std::vector<std::string> messages;
+    int success_count = 0;
+
+    for (const auto& selection : batch_accounts) {
+        std::string activate_error;
+        if (!auth.set_active_account(selection.account_index, selection.account_password, activate_error)) {
+            const std::string error = selection.account_no + ": " + activate_error;
+            logger.error("Balance account selection failed: " + error);
+            messages.push_back(error);
+            continue;
+        }
+
+        logger.info(
+            "Balance query start account_index=" + std::to_string(auth.account_index()) +
+            " account_no=" + auth.account_no());
+
+        BalanceAccountResult result;
+        std::vector<std::string> warnings;
+        if (!query.fetch_balance(result, warnings)) {
+            std::string account_error = "잔고조회 실패";
+            if (!warnings.empty()) {
+                account_error = warnings.back();
+            }
+            const std::string error = auth.account_no() + ": " + account_error;
+            logger.error("Balance query failed: " + error);
+            messages.push_back(error);
+            continue;
+        }
+
+        result.warnings = warnings;
+        results.push_back(std::move(result));
+        for (const auto& warning : warnings) {
+            messages.push_back(auth.account_no() + ": " + warning);
+        }
+        ++success_count;
+    }
+
+    if (success_count == 0) {
+        error_message = "All balance account queries failed.";
+        logger.error(error_message);
+        return false;
+    }
+
+    if (!JsonExport::write_balance_atomic(output_path, results, messages, logger)) {
+        error_message = "failed to write balance JSON";
+        return false;
+    }
+
+    logger.info(
+        "fetch.exe balance completed successfully. accounts=" + std::to_string(results.size()));
+    return true;
+}
+
 int run_session_loop(QVAuth& auth, Logger& logger) {
     bool logged_in = false;
 
@@ -443,8 +526,8 @@ int run_session_loop(QVAuth& auth, Logger& logger) {
         if (command == "QUERY") {
             std::string trade_date;
             std::string output_path;
-            std::string count_raw;
-            if (!read_protocol_line(trade_date) || !read_protocol_line(output_path) || !read_protocol_line(count_raw)) {
+            std::string count_or_trade_password;
+            if (!read_protocol_line(trade_date) || !read_protocol_line(output_path) || !read_protocol_line(count_or_trade_password)) {
                 write_session_error("invalid query command payload");
                 return 1;
             }
@@ -458,12 +541,19 @@ int run_session_loop(QVAuth& auth, Logger& logger) {
                 write_session_error("invalid query arguments");
                 continue;
             }
+            std::string trade_password;
+            std::string count_raw = trim(count_or_trade_password);
             int count = 0;
-            try {
-                count = std::stoi(trim(count_raw));
-            } catch (...) {
-                write_session_error("invalid account selection count");
-                continue;
+            if (!try_parse_int(count_raw, count)) {
+                trade_password = count_raw;
+                if (!read_protocol_line(count_raw)) {
+                    write_session_error("invalid query account selection count");
+                    return 1;
+                }
+                if (!try_parse_int(count_raw, count)) {
+                    write_session_error("invalid account selection count");
+                    continue;
+                }
             }
             if (count <= 0) {
                 write_session_error("no selected accounts");
@@ -506,7 +596,77 @@ int run_session_loop(QVAuth& auth, Logger& logger) {
             }
 
             std::string run_error;
-            if (!run_batch_query(auth, logger, trade_date, output_path, selections, run_error)) {
+            if (!run_batch_query(auth, logger, trade_date, output_path, trade_password, selections, run_error)) {
+                write_session_error(run_error);
+                continue;
+            }
+            write_session_output_ok(output_path);
+            continue;
+        }
+
+        if (command == "BALANCE") {
+            std::string output_path;
+            std::string count_raw;
+            if (!read_protocol_line(output_path) || !read_protocol_line(count_raw)) {
+                write_session_error("invalid balance command payload");
+                return 1;
+            }
+            if (!logged_in) {
+                write_session_error("session is not logged in");
+                continue;
+            }
+            output_path = trim(output_path);
+            if (output_path.empty()) {
+                write_session_error("invalid balance arguments");
+                continue;
+            }
+            int count = 0;
+            if (!try_parse_int(count_raw, count)) {
+                write_session_error("invalid account selection count");
+                continue;
+            }
+            if (count <= 0) {
+                write_session_error("no selected accounts");
+                continue;
+            }
+
+            std::vector<BatchAccountSelection> selections;
+            selections.reserve(static_cast<std::size_t>(count));
+            bool parse_failed = false;
+            int consumed = 0;
+            for (int i = 0; i < count; ++i) {
+                std::string line;
+                if (!read_protocol_line(line)) {
+                    write_session_error("incomplete balance selection payload");
+                    return 1;
+                }
+                ++consumed;
+                BatchAccountSelection selection;
+                std::string parse_error;
+                if (!parse_session_selection_line(line, selection, parse_error)) {
+                    write_session_error(parse_error);
+                    parse_failed = true;
+                    break;
+                }
+                logger.info(
+                    "Session BALANCE selection account_index=" + std::to_string(selection.account_index) +
+                    " account_no=" + selection.account_no +
+                    " password_length=" + std::to_string(selection.account_password.size()) +
+                    " is_digit_4=" + std::string(is_digit_4_password(selection.account_password) ? "Y" : "N"));
+                selections.push_back(selection);
+            }
+            if (parse_failed) {
+                for (int i = consumed; i < count; ++i) {
+                    std::string discard;
+                    if (!read_protocol_line(discard)) {
+                        return 1;
+                    }
+                }
+                continue;
+            }
+
+            std::string run_error;
+            if (!run_balance_query(auth, logger, output_path, selections, run_error)) {
                 write_session_error(run_error);
                 continue;
             }
@@ -640,9 +800,15 @@ int main(int argc, char* argv[]) {
             return 0;
         }
 
+        const std::string trade_password = trim(env_or_empty("QV_TRADE_PASSWORD"));
+        auth.configure_trade_passwords(
+            trade_password,
+            trim(env_or_empty("QV_TRADE_PASSWORD1")),
+            trim(env_or_empty("QV_TRADE_PASSWORD2")));
+
         if (batch_mode) {
             std::string run_error;
-            if (!run_batch_query(auth, logger, args.date, args.output, batch_accounts, run_error)) {
+            if (!run_batch_query(auth, logger, args.date, args.output, trade_password, batch_accounts, run_error)) {
                 logger.error(run_error);
                 return EXIT_TR_FAILED;
             }

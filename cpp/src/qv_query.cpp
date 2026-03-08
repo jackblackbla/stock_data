@@ -163,6 +163,19 @@ std::string digits_only(const std::string& raw) {
     }
 }
 
+[[maybe_unused]] double parse_decimal_number(const std::string& raw) {
+    std::string cleaned = trim(raw);
+    if (cleaned.empty()) {
+        return 0.0;
+    }
+    cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), ','), cleaned.end());
+    try {
+        return std::stod(cleaned);
+    } catch (...) {
+        return static_cast<double>(parse_number(cleaned));
+    }
+}
+
 [[maybe_unused]] std::string normalize_time(const std::string& raw) {
     std::string digits = digits_only(raw);
     if (digits.size() == 6) {
@@ -260,6 +273,81 @@ const char* account_password_hash_binding_name(AccountPasswordHashBinding bindin
     return code == "10009" || code == "21263" || msg.find("계좌비밀번호") != std::string::npos;
 }
 
+struct TradePasswordResolution {
+    std::string first;
+    std::string second;
+    bool present = false;
+    int length = 0;
+};
+
+TradePasswordResolution resolve_trade_passwords(const QVAuth& auth) {
+    TradePasswordResolution resolved;
+    const std::string common = trim(auth.trade_password());
+    const std::string first_override = trim(auth.trade_password1());
+    const std::string second_override = trim(auth.trade_password2());
+    resolved.first = first_override.empty() ? common : first_override;
+    resolved.second = second_override.empty() ? common : second_override;
+    resolved.present = !resolved.first.empty() || !resolved.second.empty();
+    resolved.length = static_cast<int>(std::max(resolved.first.size(), resolved.second.size()));
+    return resolved;
+}
+
+[[maybe_unused]] bool populate_trade_password_hashes(QVAuth& auth,
+                                                     Logger& logger,
+                                                     char* first_out,
+                                                     std::size_t first_size,
+                                                     char* second_out,
+                                                     std::size_t second_size,
+                                                     S8180AttemptDiagnostic* diagnostic,
+                                                     std::string& error_message) {
+    const TradePasswordResolution resolved = resolve_trade_passwords(auth);
+    if (diagnostic != nullptr) {
+        diagnostic->trade_password_present = resolved.present;
+        diagnostic->trade_password_length = resolved.length;
+        diagnostic->trade_hash_source = resolved.present ? "wmcaSetOrderPwd" : "";
+    }
+    if (!resolved.present) {
+        error_message = "trade password is empty";
+        return false;
+    }
+
+    std::string local_error;
+    bool ok = true;
+    if (!resolved.first.empty()) {
+        ok = auth.fill_trade_password_hash(first_out, first_size, resolved.first, local_error);
+        if (!ok) {
+            error_message = local_error;
+            if (diagnostic != nullptr) {
+                diagnostic->trade_hash_generation_ok = false;
+            }
+            return false;
+        }
+    } else if (first_out != nullptr && first_size > 0) {
+        std::memset(first_out, ' ', first_size);
+    }
+
+    if (!resolved.second.empty()) {
+        ok = auth.fill_trade_password_hash(second_out, second_size, resolved.second, local_error);
+        if (!ok) {
+            error_message = local_error;
+            if (diagnostic != nullptr) {
+                diagnostic->trade_hash_generation_ok = false;
+            }
+            return false;
+        }
+    } else if (second_out != nullptr && second_size > 0) {
+        std::memset(second_out, ' ', second_size);
+    }
+
+    if (diagnostic != nullptr) {
+        diagnostic->trade_hash_generation_ok = true;
+    }
+    logger.info(
+        "trade password hashes prepared first_length=" + std::to_string(resolved.first.size()) +
+        " second_length=" + std::to_string(resolved.second.size()));
+    return true;
+}
+
 [[maybe_unused]] const char* hash_source_name(AccountPasswordHashBinding binding) {
     switch (binding) {
         case AccountPasswordHashBinding::Index:
@@ -304,9 +392,13 @@ struct S8180AttemptResult {
 
     const S8180AttemptDiagnostic& last = attempts.back();
     diagnostic.hash_generation_ok = last.hash_generation_ok;
+    diagnostic.trade_password_present = last.trade_password_present;
+    diagnostic.trade_password_length = last.trade_password_length;
+    diagnostic.trade_hash_generation_ok = last.trade_hash_generation_ok;
     diagnostic.query_submitted = last.query_submitted;
     diagnostic.query_succeeded = last.query_succeeded;
     diagnostic.hash_source = last.hash_source;
+    diagnostic.trade_hash_source = last.trade_hash_source;
     diagnostic.server_message_code = last.server_message_code;
     diagnostic.server_message = last.server_message;
     diagnostic.classification = last.classification;
@@ -323,7 +415,7 @@ struct S8180AttemptResult {
         } else if (first.classification == "account_password_rejected" &&
                    last.classification == "account_password_rejected") {
             diagnostic.classification = "account_password_rejected";
-            diagnostic.candidate_cause = "account_ineligible_or_password_rejected_on_all_bindings";
+            diagnostic.candidate_cause = "credential_rejected_after_full_password_payload";
         }
     }
 
@@ -503,11 +595,76 @@ struct Ts8118OutBlock {
     char cancel_qtyz10[10];
 };
 
+struct Tc8201InBlock {
+    char pswd_noz44[44];
+    char bnc_bse_cdz1[1];
+    char aet_bsez1[1];
+    char qut_dit_cdz3[3];
+};
+
+struct Tc8201OutBlock {
+    char dpsit_amtz16[16];
+    char mrgn_amtz16[16];
+    char mgint_npaid_amtz16[16];
+    char chgm_pos_amtz16[16];
+    char cash_mrgn_amtz16[16];
+    char subst_mgamt_amtz16[16];
+    char coltr_ratez6[6];
+    char rcble_amtz16[16];
+    char order_pos_csamtz16[16];
+    char ecn_pos_csamtz16[16];
+    char nordm_loan_amtz16[16];
+    char etc_lend_amtz16[16];
+    char subst_amtz16[16];
+    char sln_sale_amtz16[16];
+    char bal_buy_ttamtz16[16];
+    char bal_ass_ttamtz16[16];
+    char asset_tot_amtz16[16];
+    char actvt_type10[10];
+    char lend_amtz16[16];
+    char accnt_mgamt_ratez6[6];
+    char sl_mrgn_amtz16[16];
+    char pos_csamt1z16[16];
+    char pos_csamt2z16[16];
+    char pos_csamt3z16[16];
+    char pos_csamt4z16[16];
+    char dpsit_amtz_d1_16[16];
+    char dpsit_amtz_d2_16[16];
+    char noticez30[30];
+    char tot_eal_plsz18[18];
+    char pft_rtz15[15];
+    char nas_tot_amtz18[18];
+    char nas_tot_txtz8[8];
+};
+
+struct Tc8201OutBlock1 {
+    char issue_codez6[6];
+    char issue_namez40[40];
+    char bal_typez6[6];
+    char loan_datez10[10];
+    char bal_qtyz16[16];
+    char unstl_qtyz16[16];
+    char slby_amtz16[16];
+    char prsnt_pricez16[16];
+    char lsnpf_amtz16[16];
+    char earn_ratez9[9];
+    char mrgn_codez4[4];
+    char jan_qtyz16[16];
+    char expr_datez10[10];
+    char ass_amtz16[16];
+    char issue_mgamt_ratez6[6];
+    char medo_slby_amtz16[16];
+    char post_lsnpf_amtz16[16];
+};
+
 static_assert(sizeof(Ts8180InBlock) == 233, "Ts8180InBlock size mismatch");
 static_assert(sizeof(Ts8180OutBlock1) == 455, "Ts8180OutBlock1 size mismatch");
 static_assert(sizeof(Ts8180OutBlockIN) == 57, "Ts8180OutBlockIN size mismatch");
 static_assert(sizeof(Ts8118InBlock) == 106, "Ts8118InBlock size mismatch");
 static_assert(sizeof(Ts8118OutBlock) == 207, "Ts8118OutBlock size mismatch");
+static_assert(sizeof(Tc8201InBlock) == 49, "Tc8201InBlock size mismatch");
+static_assert(sizeof(Tc8201OutBlock) == 479, "Tc8201OutBlock size mismatch");
+static_assert(sizeof(Tc8201OutBlock1) == 235, "Tc8201OutBlock1 size mismatch");
 
 std::string map_s8180_market(const Ts8180OutBlock1& row) {
     const std::string req = normalize_market_code(fixed_cp949_field(row.req_mkt_codez3));
@@ -541,7 +698,10 @@ QVQuery::QVQuery(QVAuth& auth, Logger& logger) : auth_(auth), logger_(logger) {
         " s8180_out1=" + std::to_string(sizeof(Ts8180OutBlock1)) +
         " s8180_paging=" + std::to_string(sizeof(Ts8180OutBlockIN)) +
         " s8118_in=" + std::to_string(sizeof(Ts8118InBlock)) +
-        " s8118_out=" + std::to_string(sizeof(Ts8118OutBlock)));
+        " s8118_out=" + std::to_string(sizeof(Ts8118OutBlock)) +
+        " c8201_in=" + std::to_string(sizeof(Tc8201InBlock)) +
+        " c8201_out=" + std::to_string(sizeof(Tc8201OutBlock)) +
+        " c8201_out1=" + std::to_string(sizeof(Tc8201OutBlock1)));
 #endif
 }
 
@@ -652,6 +812,210 @@ bool QVQuery::fetch_executions(const std::string& trade_date,
     return true;
 }
 
+bool QVQuery::fetch_balance(BalanceAccountResult& out, std::vector<std::string>& warnings) {
+    warnings.clear();
+    out = BalanceAccountResult{};
+    out.selected_account = auth_.active_account();
+    out.summary.account_no = auth_.account_no();
+
+    if (auth_.is_mock_mode()) {
+        return fill_mock_c8201(out);
+    }
+
+#ifndef _WIN32
+    logger_.warn("c8201 query is supported only on Windows.");
+    warnings.push_back("잔고조회는 Windows에서만 지원됩니다.");
+    return false;
+#else
+    const std::string tr_code = env_or_default("QV_BALANCE_TR_CODE", "c8201");
+    const int tr_index = next_balance_tr_index_++;
+    auth_.discard_stale_query_events("before c8201 tr_index=" + std::to_string(tr_index));
+
+    Tc8201InBlock input;
+    std::memset(&input, 0x20, sizeof(input));
+    std::string account_hash_error;
+    if (!auth_.fill_account_password_hash(input.pswd_noz44, sizeof(input.pswd_noz44), false, account_hash_error)) {
+        warnings.push_back("계좌 비밀번호 해시 생성 실패");
+        logger_.error("c8201 account password hash fill failed: " + account_hash_error);
+        return false;
+    }
+    set_fixed_field(input.bnc_bse_cdz1, "1");
+    set_fixed_field(input.aet_bsez1, "1");
+    set_fixed_field(input.qut_dit_cdz3, "UNT");
+
+    logger_.info(
+        "Submitting c8201 tr_index=" + std::to_string(tr_index) +
+        " account_index=" + std::to_string(auth_.account_index()) +
+        " account_no=" + auth_.account_no());
+
+    if (!auth_.submit_query(tr_index, tr_code, &input, static_cast<int>(sizeof(input)))) {
+        logger_.error("submit_query failed for tr=" + tr_code);
+        warnings.push_back("잔고조회 TR 제출 실패");
+        return false;
+    }
+
+    const int timeout_ms = [] {
+        try {
+            return std::stoi(env_or_default("QV_QUERY_TIMEOUT_MS", "15000"));
+        } catch (...) {
+            return 15000;
+        }
+    }();
+
+    const auto push_warning = [&](const std::string& message) {
+        if (message.empty()) {
+            return;
+        }
+        if (std::find(warnings.begin(), warnings.end(), message) == warnings.end()) {
+            warnings.push_back(message);
+        }
+    };
+
+    bool saw_summary = false;
+    const auto start = std::chrono::steady_clock::now();
+    while (true) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start);
+        if (elapsed.count() >= timeout_ms) {
+            logger_.warn("c8201 query timeout");
+            push_warning("잔고조회 TR 타임아웃");
+            auth_.drain_events_for_tr(tr_index, 500, "c8201 timeout");
+            out.warnings = warnings;
+            return false;
+        }
+
+        QVEvent event;
+        std::string wait_error;
+        if (!auth_.wait_for_event(event, 500, wait_error)) {
+            if (wait_error.rfind("timeout", 0) == 0) {
+                continue;
+            }
+            logger_.warn("c8201 wait_for_event failed: " + wait_error);
+            push_warning("잔고조회 이벤트 대기 실패");
+            auth_.drain_events_for_tr(tr_index, 500, "c8201 wait_for_event failed");
+            out.warnings = warnings;
+            return false;
+        }
+
+        logger_.info(
+            "c8201 event tr_index=" + std::to_string(event.tr_index) +
+            " code=" + event_code_name(event.code) +
+            " block_name=" + (event.block_name.empty() ? std::string("<empty>") : event.block_name) +
+            " data_len=" + std::to_string(event.data_len));
+
+        if (event.code == CA_RECEIVEMESSAGE) {
+            if (event.tr_index == tr_index && !event.data.empty() &&
+                event.data_len >= static_cast<int>(sizeof(MessageHeader))) {
+                const auto* header = reinterpret_cast<const MessageHeader*>(event.data.data());
+                const std::string code =
+                    trim(cp949_to_utf8(header->message_code, static_cast<int>(sizeof(header->message_code))));
+                const std::string msg =
+                    trim(cp949_to_utf8(header->message, static_cast<int>(sizeof(header->message))));
+                logger_.info("c8201 message [" + code + "] " + msg);
+                if (code != "00000" && !msg.empty()) {
+                    push_warning(msg);
+                }
+            }
+            continue;
+        }
+
+        if (event.code == CA_RECEIVEERROR) {
+            const std::string message =
+                event.tr_index == tr_index && !event.data.empty() ? cstr_cp949(event.data.data()) : "잔고조회 수신 오류";
+            logger_.warn("c8201 receive error: " + message);
+            push_warning(message);
+            auth_.drain_events_for_tr(tr_index, 500, "c8201 receive error");
+            out.warnings = warnings;
+            return false;
+        }
+
+        if (event.code == CA_RECEIVEDATA) {
+            if (event.tr_index != tr_index || event.data.empty()) {
+                continue;
+            }
+
+            const std::string block_name = lower_ascii(event.block_name);
+            logger_.info(
+                "c8201 received data block_name=" + (block_name.empty() ? std::string("<empty>") : block_name) +
+                " payload_len=" + std::to_string(event.data_len));
+
+            if (block_name.find("outblock1") != std::string::npos) {
+                const int row_size = static_cast<int>(sizeof(Tc8201OutBlock1));
+                if (event.data_len < row_size) {
+                    logger_.warn("c8201 outblock1 too short payload_len=" + std::to_string(event.data_len));
+                    continue;
+                }
+                const int count = event.data_len / row_size;
+                const auto* rows = reinterpret_cast<const Tc8201OutBlock1*>(event.data.data());
+                for (int i = 0; i < count; ++i) {
+                    const Tc8201OutBlock1& row = rows[i];
+                    BalancePosition position;
+                    position.account_no = auth_.account_no();
+                    position.stock_code = normalize_stock_code(fixed_cp949_field(row.issue_codez6));
+                    position.stock_name = fixed_cp949_field(row.issue_namez40);
+                    position.balance_type = fixed_cp949_field(row.bal_typez6);
+                    position.loan_date = fixed_cp949_field(row.loan_datez10);
+                    position.quantity = parse_number(fixed_cp949_field(row.bal_qtyz16));
+                    position.unsettled_quantity = parse_number(fixed_cp949_field(row.unstl_qtyz16));
+                    position.avg_buy_price = parse_number(fixed_cp949_field(row.slby_amtz16));
+                    position.current_price = parse_number(fixed_cp949_field(row.prsnt_pricez16));
+                    position.profit_loss = parse_number(fixed_cp949_field(row.lsnpf_amtz16));
+                    position.profit_rate = parse_decimal_number(fixed_cp949_field(row.earn_ratez9));
+                    position.credit_type = fixed_cp949_field(row.mrgn_codez4);
+                    position.remaining_quantity = parse_number(fixed_cp949_field(row.jan_qtyz16));
+                    position.expiry_date = fixed_cp949_field(row.expr_datez10);
+                    position.valuation_amount = parse_number(fixed_cp949_field(row.ass_amtz16));
+                    position.issue_margin_rate = fixed_cp949_field(row.issue_mgamt_ratez6);
+                    position.avg_sell_price = parse_number(fixed_cp949_field(row.medo_slby_amtz16));
+                    position.sell_profit_loss = parse_number(fixed_cp949_field(row.post_lsnpf_amtz16));
+                    out.positions.push_back(position);
+                }
+                continue;
+            }
+
+            if (block_name.find("outblock") != std::string::npos) {
+                if (event.data_len < static_cast<int>(sizeof(Tc8201OutBlock))) {
+                    logger_.warn("c8201 outblock too short payload_len=" + std::to_string(event.data_len));
+                    continue;
+                }
+                const auto* block = reinterpret_cast<const Tc8201OutBlock*>(event.data.data());
+                out.summary.account_no = auth_.account_no();
+                out.summary.deposit_amount = parse_number(fixed_cp949_field(block->dpsit_amtz16));
+                out.summary.withdrawable_amount = parse_number(fixed_cp949_field(block->chgm_pos_amtz16));
+                out.summary.orderable_amount = parse_number(fixed_cp949_field(block->order_pos_csamtz16));
+                out.summary.cash_margin = parse_number(fixed_cp949_field(block->cash_mrgn_amtz16));
+                out.summary.substitute_margin = parse_number(fixed_cp949_field(block->subst_mgamt_amtz16));
+                out.summary.d1_deposit = parse_number(fixed_cp949_field(block->dpsit_amtz_d1_16));
+                out.summary.d2_deposit = parse_number(fixed_cp949_field(block->dpsit_amtz_d2_16));
+                out.summary.purchase_amount_total = parse_number(fixed_cp949_field(block->bal_buy_ttamtz16));
+                out.summary.valuation_amount_total = parse_number(fixed_cp949_field(block->bal_ass_ttamtz16));
+                out.summary.net_asset_amount = parse_number(fixed_cp949_field(block->asset_tot_amtz16));
+                out.summary.total_profit_loss = parse_number(fixed_cp949_field(block->tot_eal_plsz18));
+                out.summary.profit_rate = parse_decimal_number(fixed_cp949_field(block->pft_rtz15));
+                out.summary.net_total_asset_amount = parse_number(fixed_cp949_field(block->nas_tot_amtz18));
+                out.summary.activity_type = fixed_cp949_field(block->actvt_type10);
+                saw_summary = true;
+                continue;
+            }
+
+            logger_.warn("c8201 ignored data block block_name=" + block_name);
+            continue;
+        }
+
+        if (event.code == CA_RECEIVECOMPLETE && event.tr_index == tr_index) {
+            out.warnings = warnings;
+            logger_.info(
+                "c8201 receive complete positions=" + std::to_string(out.positions.size()) +
+                " saw_summary=" + std::string(saw_summary ? "Y" : "N"));
+            if (!saw_summary) {
+                push_warning("잔고조회 요약 데이터가 없습니다.");
+            }
+            return saw_summary;
+        }
+    }
+#endif
+}
+
 bool QVQuery::fetch_s8180_page(const std::string& trade_date,
                                const std::string& cts,
                                bool is_page_up,
@@ -746,6 +1110,27 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
             set_fixed_field(input.pswd_noz44, "");
         }
 
+        std::string trade_hash_error;
+        if (!populate_trade_password_hashes(
+                auth_,
+                logger_,
+                input.trad_pswd1z44,
+                sizeof(input.trad_pswd1z44),
+                input.trad_pswd2z44,
+                sizeof(input.trad_pswd2z44),
+                &attempt.diagnostic,
+                trade_hash_error)) {
+            logger_.error("s8180 trade password hash fill failed: " + trade_hash_error);
+            attempt.fatal_error = true;
+            attempt.page_error = "거래 비밀번호 해시 생성 실패";
+            attempt.diagnostic.classification =
+                attempt.diagnostic.trade_password_present ? "trade_password_hash_generation_failed" : "missing_trade_password";
+            attempt.diagnostic.candidate_cause =
+                attempt.diagnostic.trade_password_present ? "trade_password_hash_generation_failed" : "missing_trade_password";
+            attempt.diagnostic.failure_reason = trade_hash_error;
+            return attempt;
+        }
+
         logger_.info(
             "s8180 password mode=" + std::string(s8180_password_mode_name(password_mode)) +
             " hash_binding=" + std::string(
@@ -762,7 +1147,9 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
                 password_mode == S8180PasswordMode::Encrypted
                     ? account_password_hash_binding_name(binding)
                     : "n/a") +
-            " encrypted_len=" + std::to_string(password_mode == S8180PasswordMode::Encrypted ? password_len : 0));
+            " encrypted_len=" + std::to_string(password_mode == S8180PasswordMode::Encrypted ? password_len : 0) +
+            " trade_password_present=" + std::string(attempt.diagnostic.trade_password_present ? "Y" : "N") +
+            " trade_password_length=" + std::to_string(attempt.diagnostic.trade_password_length));
 
         set_fixed_field(input.group_noz4, env_or_default("QV_GROUP_NO", "0000"));
         set_fixed_field(input.mkt_slctz1, env_or_default("QV_MKT_SLCT", "0"));
@@ -777,8 +1164,6 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
         set_fixed_field(input.accnt_admin_typez1, env_or_default("QV_ACCNT_ADMIN", "0"));
         set_fixed_field(input.order_noz10, env_or_empty("QV_ORDER_NO"));
         set_fixed_field(input.ctsz56, cts);
-        set_fixed_field(input.trad_pswd1z44, env_or_empty("QV_TRADE_PASSWORD1"));
-        set_fixed_field(input.trad_pswd2z44, env_or_empty("QV_TRADE_PASSWORD2"));
         set_fixed_field(input.IsPageUp, is_page_up ? "N" : "");
 
         logger_.info(
@@ -850,7 +1235,7 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
                         attempt.password_rejected = true;
                         attempt.page_error = "계좌 비밀번호 오류";
                         attempt.diagnostic.classification = "account_password_rejected";
-                        attempt.diagnostic.candidate_cause = "binding_mismatch_or_ineligible_account";
+                        attempt.diagnostic.candidate_cause = "credential_rejected_after_full_password_payload";
                         attempt.diagnostic.failure_reason = msg.empty() ? attempt.page_error : msg;
                         auth_.drain_events_for_tr(tr_index, 1000, "s8180 account password rejected");
                         return attempt;
@@ -1064,13 +1449,27 @@ bool QVQuery::fetch_s8118_details(const std::string& trade_date,
     Ts8118InBlock input{};
     set_fixed_field(input.order_datez8, trade_date);
     set_fixed_field(input.order_noz10, normalize_order_no(order_no));
-    set_fixed_field(input.trad_pswd1z44, env_or_empty("QV_TRADE_PASSWORD1"));
-    set_fixed_field(input.trad_pswd2z44, env_or_empty("QV_TRADE_PASSWORD2"));
+    S8180AttemptDiagnostic trade_diagnostic;
+    std::string trade_hash_error;
+    if (!populate_trade_password_hashes(
+            auth_,
+            logger_,
+            input.trad_pswd1z44,
+            sizeof(input.trad_pswd1z44),
+            input.trad_pswd2z44,
+            sizeof(input.trad_pswd2z44),
+            &trade_diagnostic,
+            trade_hash_error)) {
+        logger_.warn("s8118 trade password hash fill failed: " + trade_hash_error);
+        return false;
+    }
 
     logger_.info(
         "Submitting s8118 tr_index=" + std::to_string(tr_index) +
         " trade_date=" + trade_date +
-        " order_no=" + normalize_order_no(order_no));
+        " order_no=" + normalize_order_no(order_no) +
+        " trade_password_present=" + std::string(trade_diagnostic.trade_password_present ? "Y" : "N") +
+        " trade_password_length=" + std::to_string(trade_diagnostic.trade_password_length));
 
     if (!auth_.submit_query(tr_index, tr_code, &input, static_cast<int>(sizeof(input)))) {
         logger_.warn("submit_query failed for s8118 order_no=" + order_no);
@@ -1278,5 +1677,55 @@ bool QVQuery::fill_mock_s8118(const std::string& order_no,
     details.push_back(SplitDetail{37, 2645500, 71500, "09:31:02", "KRX"});
     details.push_back(SplitDetail{7, 501200, 71600, "09:31:02", "NXT"});
     details.push_back(SplitDetail{56, 4006800, 71550, "09:31:05", "KRX"});
+    return true;
+}
+
+bool QVQuery::fill_mock_c8201(BalanceAccountResult& out) {
+    out = BalanceAccountResult{};
+    out.selected_account = auth_.active_account();
+    out.summary.account_no = auth_.account_no();
+    out.summary.deposit_amount = 25000000;
+    out.summary.withdrawable_amount = 23000000;
+    out.summary.orderable_amount = 22000000;
+    out.summary.cash_margin = 1500000;
+    out.summary.substitute_margin = 3000000;
+    out.summary.d1_deposit = 24000000;
+    out.summary.d2_deposit = 25000000;
+    out.summary.purchase_amount_total = 11230000;
+    out.summary.valuation_amount_total = 11980000;
+    out.summary.net_asset_amount = 36980000;
+    out.summary.total_profit_loss = 750000;
+    out.summary.profit_rate = 6.68;
+    out.summary.net_total_asset_amount = 36980000;
+    out.summary.activity_type = "활동";
+
+    BalancePosition samsung;
+    samsung.account_no = auth_.account_no();
+    samsung.stock_code = "005930";
+    samsung.stock_name = "삼성전자";
+    samsung.balance_type = "보통";
+    samsung.quantity = 100;
+    samsung.avg_buy_price = 71500;
+    samsung.current_price = 73000;
+    samsung.profit_loss = 150000;
+    samsung.profit_rate = 2.10;
+    samsung.remaining_quantity = 100;
+    samsung.valuation_amount = 7300000;
+    out.positions.push_back(samsung);
+
+    BalancePosition hynix;
+    hynix.account_no = auth_.account_no();
+    hynix.stock_code = "000660";
+    hynix.stock_name = "SK하이닉스";
+    hynix.balance_type = "보통";
+    hynix.quantity = 50;
+    hynix.avg_buy_price = 223000;
+    hynix.current_price = 230000;
+    hynix.profit_loss = 350000;
+    hynix.profit_rate = 3.14;
+    hynix.remaining_quantity = 50;
+    hynix.valuation_amount = 11500000;
+    out.positions.push_back(hynix);
+
     return true;
 }
