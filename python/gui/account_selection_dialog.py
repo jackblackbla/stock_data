@@ -56,7 +56,8 @@ class AccountSelectionDialog(QDialog):
         for row_idx, account in enumerate(accounts, start=1):
             chk = QCheckBox()
             chk.setChecked(True)
-            account_label = QLabel(account.account_no)
+            account_label = QLabel(self._format_account_label(account))
+            account_label.setWordWrap(True)
             password = QLineEdit(remembered_passwords.get(account.account_no, ""))
             password.setEchoMode(QLineEdit.Password)
             password.setPlaceholderText("4자리")
@@ -105,9 +106,27 @@ class AccountSelectionDialog(QDialog):
                     account_index=row.account.account_index,
                     account_no=row.account.account_no,
                     account_password=row.password.text().strip(),
+                    account_name=row.account.account_name,
+                    act_pdt_cd=row.account.act_pdt_cd,
+                    amn_tab_cd=row.account.amn_tab_cd,
+                    expr_date=row.account.expr_date,
+                    granted=row.account.granted,
+                    is_granted_batch=row.account.is_granted_batch,
+                    diagnostic_labels=list(row.account.diagnostic_labels),
                 )
             )
         return selected
+
+    @staticmethod
+    def _format_account_label(account: AccountInfo) -> str:
+        parts = [account.account_no]
+        if account.account_name:
+            parts.append(account.account_name)
+        if account.act_pdt_cd:
+            parts.append(f"[{account.act_pdt_cd}]")
+        if account.granted:
+            parts.append(f"batch={account.granted}")
+        return " ".join(parts)
 
     def _on_accept(self) -> None:
         selected = self.selected_accounts()

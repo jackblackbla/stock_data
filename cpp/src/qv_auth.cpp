@@ -42,6 +42,13 @@ std::string env_or_empty(const char* key) {
     return input.substr(start, end - start);
 }
 
+[[maybe_unused]] std::string upper_ascii(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+        return static_cast<char>(std::toupper(c));
+    });
+    return value;
+}
+
 bool is_digit_4_password(const std::string& value) {
     if (value.size() != 4) {
         return false;
@@ -421,6 +428,30 @@ std::string cstr_cp949(const char* cstr) {
     return trim(cp949_to_utf8(cstr, static_cast<int>(std::strlen(cstr))));
 }
 
+std::string today_yyyymmdd_local() {
+    const auto now = std::chrono::system_clock::now();
+    const auto tt = std::chrono::system_clock::to_time_t(now);
+    std::tm tm_now{};
+    localtime_s(&tm_now, &tt);
+    char buffer[9] = {};
+    std::strftime(buffer, sizeof(buffer), "%Y%m%d", &tm_now);
+    return std::string(buffer);
+}
+
+std::vector<std::string> build_account_diagnostic_labels(const QVAccount& account) {
+    std::vector<std::string> labels;
+    if (!account.is_granted_batch) {
+        labels.push_back("not_granted");
+    }
+    if (trim(account.act_pdt_cd).empty()) {
+        labels.push_back("unknown_product");
+    }
+    if (account.expr_date.size() == 8 && account.expr_date < today_yyyymmdd_local()) {
+        labels.push_back("expired_expr_date");
+    }
+    return labels;
+}
+
 struct QVEventEntry {
     std::uint32_t code;
     std::intptr_t raw_lparam = 0;
@@ -560,7 +591,11 @@ bool QVAuth::load_dll() {
         account_no_ = "1234567890";
         account_index_ = 1;
         accounts_.clear();
-        accounts_.push_back(QVAccount{1, account_no_});
+        QVAccount mock_account;
+        mock_account.account_index = 1;
+        mock_account.account_no = account_no_;
+        accounts_.push_back(mock_account);
+        active_account_ = accounts_.front();
         logger_.warn("QV_MOCK=1 enabled. fetch.exe runs in mock mode.");
         return true;
     }
@@ -820,6 +855,9 @@ bool QVAuth::set_active_account(int account_index, const std::string& account_pa
         if (account_no_.empty()) {
             account_no_ = "0000000000";
         }
+        active_account_ = QVAccount{};
+        active_account_.account_index = account_index_;
+        active_account_.account_no = account_no_;
     } else {
         const auto it = std::find_if(accounts_.begin(), accounts_.end(), [account_index](const QVAccount& account) {
             return account.account_index == account_index;
@@ -830,6 +868,7 @@ bool QVAuth::set_active_account(int account_index, const std::string& account_pa
         }
         account_index_ = it->account_index;
         account_no_ = it->account_no;
+        active_account_ = *it;
     }
 
     logger_.info(
@@ -1041,6 +1080,10 @@ const std::vector<QVAccount>& QVAuth::accounts() const {
     return accounts_;
 }
 
+const QVAccount& QVAuth::active_account() const {
+    return active_account_;
+}
+
 bool QVAuth::is_mock_mode() const {
     return mock_mode_;
 }
@@ -1202,13 +1245,31 @@ bool QVAuth::wait_for_connected(int timeout_ms, std::string& error_message) {
 
             accounts_.clear();
             for (int i = 0; i < account_count; ++i) {
-                const std::string account_no = fixed_cp949_field(
+                QVAccount account;
+                account.account_index = i + 1;
+                account.account_no = fixed_cp949_field(
                     info->account_infoes[i].account_no,
                     static_cast<int>(sizeof(info->account_infoes[i].account_no)));
+                account.account_name = fixed_cp949_field(
+                    info->account_infoes[i].account_name,
+                    static_cast<int>(sizeof(info->account_infoes[i].account_name)));
+                account.act_pdt_cd = fixed_cp949_field(
+                    info->account_infoes[i].act_pdt_cdz3,
+                    static_cast<int>(sizeof(info->account_infoes[i].act_pdt_cdz3)));
+                account.amn_tab_cd = fixed_cp949_field(
+                    info->account_infoes[i].amn_tab_cdz4,
+                    static_cast<int>(sizeof(info->account_infoes[i].amn_tab_cdz4)));
+                account.expr_date = fixed_cp949_field(
+                    info->account_infoes[i].expr_datez8,
+                    static_cast<int>(sizeof(info->account_infoes[i].expr_datez8)));
+                account.granted = upper_ascii(trim(std::string(1, info->account_infoes[i].granted)));
+                account.is_granted_batch = account.granted == "G";
+                account.diagnostic_labels = build_account_diagnostic_labels(account);
+                const std::string& account_no = account.account_no;
                 if (account_no.empty()) {
                     continue;
                 }
-                accounts_.push_back(QVAccount{i + 1, account_no});
+                accounts_.push_back(account);
             }
 
             account_index_ = env_to_int("QV_ACCOUNT_INDEX", 1);
@@ -1218,15 +1279,23 @@ bool QVAuth::wait_for_connected(int timeout_ms, std::string& error_message) {
 
             if (!accounts_.empty()) {
                 int selected = std::clamp(account_index_ - 1, 0, static_cast<int>(accounts_.size()) - 1);
-                account_no_ = accounts_[selected].account_no;
-                account_index_ = accounts_[selected].account_index;
+                active_account_ = accounts_[selected];
+                account_no_ = active_account_.account_no;
+                account_index_ = active_account_.account_index;
                 std::string account_log = "Available accounts:";
                 for (const auto& account : accounts_) {
-                    account_log += " [" + std::to_string(account.account_index) + "]" + account.account_no;
+                    account_log +=
+                        " [" + std::to_string(account.account_index) + "]" + account.account_no +
+                        "/" + (account.account_name.empty() ? std::string("-") : account.account_name) +
+                        "/pdt=" + (account.act_pdt_cd.empty() ? std::string("-") : account.act_pdt_cd) +
+                        "/granted=" + (account.granted.empty() ? std::string("-") : account.granted);
                 }
                 logger_.info(account_log);
             } else {
                 account_no_ = "0000000000";
+                active_account_ = QVAccount{};
+                active_account_.account_index = account_index_;
+                active_account_.account_no = account_no_;
             }
 
             return true;

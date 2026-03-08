@@ -20,6 +20,13 @@ struct QVEvent {
 struct QVAccount {
     int account_index = 1;
     std::string account_no;
+    std::string account_name;
+    std::string act_pdt_cd;
+    std::string amn_tab_cd;
+    std::string expr_date;
+    std::string granted;
+    bool is_granted_batch = false;
+    std::vector<std::string> diagnostic_labels;
 };
 
 class QVAuth {
@@ -54,6 +61,7 @@ public:
     int account_index() const;
     const std::string& account_password() const;
     const std::vector<QVAccount>& accounts() const;
+    const QVAccount& active_account() const;
     bool is_mock_mode() const;
 
 private:
@@ -63,6 +71,7 @@ private:
     std::string encrypted_password_;
     int account_index_ = 1;
     std::vector<QVAccount> accounts_;
+    QVAccount active_account_;
     bool mock_mode_ = false;
 
 #ifdef _WIN32

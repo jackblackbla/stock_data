@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from core.fetch_service import AccountSelection, FetchError, FetchService
+from core.fetch_service import AccountInfo, AccountSelection, FetchError, FetchService
 from core.runtime_paths import AppPaths
 
 
@@ -64,3 +64,52 @@ def test_invalid_account_password_is_rejected_before_query(tmp_path: Path) -> No
             paths.json_dir / "20260306.json",
             [AccountSelection(account_index=1, account_no="04501201721", account_password="12a4")],
         )
+
+
+def test_parse_accounts_payload_supports_extended_metadata() -> None:
+    payload = {
+        "accounts": [
+            {
+                "account_index": 3,
+                "account_no": "20001505931",
+                "account_name": "종합매매",
+                "act_pdt_cd": "001",
+                "amn_tab_cd": "1001",
+                "expr_date": "20271231",
+                "granted": "G",
+                "is_granted_batch": True,
+                "diagnostic_labels": ["unknown_product"],
+            }
+        ]
+    }
+
+    accounts = FetchService._parse_accounts_payload(payload)
+
+    assert accounts == [
+        AccountInfo(
+            account_index=3,
+            account_no="20001505931",
+            account_name="종합매매",
+            act_pdt_cd="001",
+            amn_tab_cd="1001",
+            expr_date="20271231",
+            granted="G",
+            is_granted_batch=True,
+            diagnostic_labels=["unknown_product"],
+        )
+    ]
+
+
+def test_parse_accounts_payload_is_backward_compatible() -> None:
+    payload = {
+        "accounts": [
+            {
+                "account_index": 1,
+                "account_no": "04501201721",
+            }
+        ]
+    }
+
+    accounts = FetchService._parse_accounts_payload(payload)
+
+    assert accounts == [AccountInfo(account_index=1, account_no="04501201721")]

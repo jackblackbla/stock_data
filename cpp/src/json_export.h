@@ -6,6 +6,7 @@
 
 #include "logger.h"
 #include "qv_auth.h"
+#include "qv_query.h"
 #include "types.h"
 
 class JsonExport {
@@ -21,6 +22,11 @@ public:
                              const std::vector<ExecutionRecord>& executions,
                              const std::vector<std::string>& errors,
                              Logger& logger);
+
+    static bool write_s8180_diagnostics_atomic(const std::string& output_path,
+                                               const std::string& trade_date,
+                                               const std::vector<S8180Diagnostic>& diagnostics,
+                                               Logger& logger);
 };
 
 #endif

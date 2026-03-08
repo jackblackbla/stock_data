@@ -205,9 +205,10 @@ enum class S8180PasswordMode {
 enum class AccountPasswordHashBinding {
     Index,
     AccountNo,
+    AutoProbe,
 };
 
-S8180PasswordMode resolve_s8180_password_mode() {
+[[maybe_unused]] S8180PasswordMode resolve_s8180_password_mode() {
     const std::string raw = lower_ascii(trim(env_or_default("QV_S8180_PASSWORD_MODE", "encrypted")));
     if (raw == "plain") {
         return S8180PasswordMode::Plain;
@@ -231,8 +232,11 @@ const char* s8180_password_mode_name(S8180PasswordMode mode) {
     }
 }
 
-AccountPasswordHashBinding resolve_account_password_hash_binding() {
+[[maybe_unused]] AccountPasswordHashBinding resolve_account_password_hash_binding() {
     const std::string raw = lower_ascii(trim(env_or_default("QV_ACCOUNT_PASSWORD_HASH_BINDING", "index")));
+    if (raw == "auto_probe" || raw == "auto-probe" || raw == "autoprobe") {
+        return AccountPasswordHashBinding::AutoProbe;
+    }
     if (raw == "account_no" || raw == "account-no" || raw == "accountno") {
         return AccountPasswordHashBinding::AccountNo;
     }
@@ -245,9 +249,91 @@ const char* account_password_hash_binding_name(AccountPasswordHashBinding bindin
             return "index";
         case AccountPasswordHashBinding::AccountNo:
             return "account_no";
+        case AccountPasswordHashBinding::AutoProbe:
+            return "auto_probe";
         default:
             return "unknown";
     }
+}
+
+[[maybe_unused]] bool is_password_rejected_message(const std::string& code, const std::string& msg) {
+    return code == "10009" || code == "21263" || msg.find("계좌비밀번호") != std::string::npos;
+}
+
+[[maybe_unused]] const char* hash_source_name(AccountPasswordHashBinding binding) {
+    switch (binding) {
+        case AccountPasswordHashBinding::Index:
+            return "wmcaSetAccountIndexPwd";
+        case AccountPasswordHashBinding::AccountNo:
+            return "wmcaSetAccountNoPwd";
+        case AccountPasswordHashBinding::AutoProbe:
+            return "auto_probe";
+        default:
+            return "unknown";
+    }
+}
+
+struct S8180AttemptResult {
+    bool success = false;
+    bool fatal_error = false;
+    bool password_rejected = false;
+    std::vector<ExecutionRecord> page_out;
+    std::string next_cts;
+    bool has_more = false;
+    std::string page_error;
+    S8180AttemptDiagnostic diagnostic;
+};
+
+[[maybe_unused]] S8180Diagnostic build_overall_diagnostic(const std::string& trade_date,
+                                                          const QVAccount& account,
+                                                          AccountPasswordHashBinding requested_binding,
+                                                          S8180PasswordMode password_mode,
+                                                          const std::vector<S8180AttemptDiagnostic>& attempts) {
+    S8180Diagnostic diagnostic;
+    diagnostic.trade_date = trade_date;
+    diagnostic.selected_account = account;
+    diagnostic.binding_mode = attempts.empty() ? "" : attempts.back().binding_mode;
+    diagnostic.binding_mode_requested = account_password_hash_binding_name(requested_binding);
+    diagnostic.password_mode = s8180_password_mode_name(password_mode);
+    diagnostic.attempts = attempts;
+    if (attempts.empty()) {
+        diagnostic.classification = "not_attempted";
+        diagnostic.candidate_cause = "undetermined";
+        return diagnostic;
+    }
+
+    const S8180AttemptDiagnostic& last = attempts.back();
+    diagnostic.hash_generation_ok = last.hash_generation_ok;
+    diagnostic.query_submitted = last.query_submitted;
+    diagnostic.query_succeeded = last.query_succeeded;
+    diagnostic.hash_source = last.hash_source;
+    diagnostic.server_message_code = last.server_message_code;
+    diagnostic.server_message = last.server_message;
+    diagnostic.classification = last.classification;
+    diagnostic.candidate_cause = last.candidate_cause;
+    diagnostic.failure_reason = last.failure_reason;
+
+    if (requested_binding == AccountPasswordHashBinding::AutoProbe && attempts.size() >= 2) {
+        const S8180AttemptDiagnostic& first = attempts.front();
+        if (first.classification == "account_password_rejected" && last.query_succeeded) {
+            diagnostic.binding_mode = last.binding_mode;
+            diagnostic.classification = "success_after_binding_switch";
+            diagnostic.candidate_cause = "hash_binding_mismatch";
+            diagnostic.failure_reason.clear();
+        } else if (first.classification == "account_password_rejected" &&
+                   last.classification == "account_password_rejected") {
+            diagnostic.classification = "account_password_rejected";
+            diagnostic.candidate_cause = "account_ineligible_or_password_rejected_on_all_bindings";
+        }
+    }
+
+    if (diagnostic.classification.empty()) {
+        diagnostic.classification = diagnostic.query_succeeded ? "success" : "undetermined";
+    }
+    if (diagnostic.candidate_cause.empty()) {
+        diagnostic.candidate_cause = diagnostic.query_succeeded ? "none" : "undetermined";
+    }
+    return diagnostic;
 }
 
 bool is_retryable_failure(int attempt, int max_attempts) {
@@ -459,9 +545,19 @@ QVQuery::QVQuery(QVAuth& auth, Logger& logger) : auth_(auth), logger_(logger) {
 #endif
 }
 
+bool QVQuery::has_last_s8180_diagnostic() const {
+    return has_last_s8180_diagnostic_;
+}
+
+const S8180Diagnostic& QVQuery::last_s8180_diagnostic() const {
+    return last_s8180_diagnostic_;
+}
+
 bool QVQuery::fetch_executions(const std::string& trade_date,
                                std::vector<ExecutionRecord>& out,
                                std::vector<std::string>& warnings) {
+    has_last_s8180_diagnostic_ = false;
+    last_s8180_diagnostic_ = S8180Diagnostic{};
     constexpr int kMaxAttempts = 3;
     std::string cts;
     bool has_more = true;
@@ -587,79 +683,8 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
     page_error.clear();
 
     const std::string tr_code = env_or_default("QV_EXEC_TR_CODE", "s8180");
-    const int tr_index = next_exec_tr_index_++;
-    auth_.discard_stale_query_events("before s8180 tr_index=" + std::to_string(tr_index));
-
-    Ts8180InBlock input;
-    std::memset(&input, 0x20, sizeof(input));
-    set_fixed_field(input.inq_gubunz1, env_or_default("QV_INQ_GUBUN", "3"));
     const auto password_mode = resolve_s8180_password_mode();
-    const auto hash_binding = resolve_account_password_hash_binding();
-    std::size_t password_len = 0;
-    if (password_mode == S8180PasswordMode::Encrypted) {
-        std::string hash_error;
-        if (!auth_.fill_account_password_hash(
-                input.pswd_noz44,
-                sizeof(input.pswd_noz44),
-                hash_binding == AccountPasswordHashBinding::AccountNo,
-                hash_error)) {
-            logger_.error("s8180 account password hash fill failed: " + hash_error);
-            fatal_error = true;
-            page_error = "계좌 비밀번호 해시 생성 실패";
-            return false;
-        }
-        password_len = sizeof(input.pswd_noz44);
-    } else if (password_mode == S8180PasswordMode::Plain) {
-        password_len = auth_.account_password().size();
-        set_fixed_field(input.pswd_noz44, auth_.account_password());
-    } else {
-        set_fixed_field(input.pswd_noz44, "");
-    }
-    logger_.info(
-        "s8180 password mode=" + std::string(s8180_password_mode_name(password_mode)) +
-        " hash_binding=" + std::string(
-            password_mode == S8180PasswordMode::Encrypted
-                ? account_password_hash_binding_name(hash_binding)
-                : "n/a") +
-        " account_index=" + std::to_string(auth_.account_index()) +
-        " account_no=" + auth_.account_no() +
-        " source_len=" + std::to_string(password_len));
-    logger_.info(
-        "s8180 password account_index=" + std::to_string(auth_.account_index()) +
-        " account_no=" + auth_.account_no() +
-        " hash_binding=" + std::string(
-            password_mode == S8180PasswordMode::Encrypted
-                ? account_password_hash_binding_name(hash_binding)
-                : "n/a") +
-        " encrypted_len=" + std::to_string(password_mode == S8180PasswordMode::Encrypted ? password_len : 0));
-    set_fixed_field(input.group_noz4, env_or_default("QV_GROUP_NO", "0000"));
-    set_fixed_field(input.mkt_slctz1, env_or_default("QV_MKT_SLCT", "0"));
-    set_fixed_field(input.order_datez8, trade_date);
-    set_fixed_field(input.issue_codez12, env_or_empty("QV_ISSUE_CODE"));
-    set_fixed_field(input.comm_order_typez2, env_or_default("QV_MEDIA_GUBUN", "CC"));
-    set_fixed_field(input.conc_gubunz1, env_or_default("QV_CONC_GUBUN", "2"));
-    set_fixed_field(input.inq_seq_gubunz1, env_or_default("QV_INQ_SEQ", "0"));
-    set_fixed_field(input.sort_gubunz1, env_or_default("QV_SORT_GUBUN", "0"));
-    set_fixed_field(input.sell_buy_typez1, env_or_default("QV_SELL_BUY", "0"));
-    set_fixed_field(input.mrgn_typez1, env_or_default("QV_MRGN_TYPE", "0"));
-    set_fixed_field(input.accnt_admin_typez1, env_or_default("QV_ACCNT_ADMIN", "0"));
-    set_fixed_field(input.order_noz10, env_or_empty("QV_ORDER_NO"));
-    set_fixed_field(input.ctsz56, cts);
-    set_fixed_field(input.trad_pswd1z44, env_or_empty("QV_TRADE_PASSWORD1"));
-    set_fixed_field(input.trad_pswd2z44, env_or_empty("QV_TRADE_PASSWORD2"));
-    set_fixed_field(input.IsPageUp, is_page_up ? "N" : "");
-
-    logger_.info(
-        "Submitting s8180 tr_index=" + std::to_string(tr_index) +
-        " trade_date=" + trade_date +
-        " cts=" + (cts.empty() ? std::string("<empty>") : cts) +
-        " is_page_up=" + std::string(is_page_up ? "Y" : "N"));
-
-    if (!auth_.submit_query(tr_index, tr_code, &input, static_cast<int>(sizeof(input)))) {
-        logger_.error("submit_query failed for tr=" + tr_code);
-        return false;
-    }
-
+    const auto requested_binding = resolve_account_password_hash_binding();
     const int timeout_ms = [] {
         try {
             return std::stoi(env_or_default("QV_QUERY_TIMEOUT_MS", "15000"));
@@ -667,180 +692,352 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
             return 15000;
         }
     }();
+    QVAccount selected_account = auth_.active_account();
+    if (selected_account.account_no.empty()) {
+        selected_account.account_index = auth_.account_index();
+        selected_account.account_no = auth_.account_no();
+    }
 
-    const auto start = std::chrono::steady_clock::now();
+    auto run_attempt = [&](AccountPasswordHashBinding binding) -> S8180AttemptResult {
+        S8180AttemptResult attempt;
+        attempt.diagnostic.binding_mode = account_password_hash_binding_name(binding);
+        attempt.diagnostic.hash_source =
+            password_mode == S8180PasswordMode::Encrypted ? hash_source_name(binding) : "n/a";
+        attempt.diagnostic.password_mode = s8180_password_mode_name(password_mode);
+        attempt.diagnostic.page_cts = cts;
+        attempt.diagnostic.is_page_up = is_page_up;
+        attempt.diagnostic.query_succeeded = false;
 
-    while (true) {
-        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - start);
-        if (elapsed.count() >= timeout_ms) {
-            logger_.error("s8180 query timeout");
-            page_error = "TR 조회 타임아웃";
-            auth_.drain_events_for_tr(tr_index, 500, "s8180 timeout");
-            return false;
-        }
+        const int tr_index = next_exec_tr_index_++;
+        attempt.diagnostic.tr_index = tr_index;
+        auth_.discard_stale_query_events("before s8180 tr_index=" + std::to_string(tr_index));
 
-        QVEvent event;
-        std::string wait_error;
-        if (!auth_.wait_for_event(event, 500, wait_error)) {
-            if (wait_error.rfind("timeout", 0) == 0) {
-                continue;
+        Ts8180InBlock input;
+        std::memset(&input, 0x20, sizeof(input));
+        set_fixed_field(input.inq_gubunz1, env_or_default("QV_INQ_GUBUN", "3"));
+
+        std::size_t password_len = 0;
+        if (password_mode == S8180PasswordMode::Encrypted) {
+            std::string hash_error;
+            if (!auth_.fill_account_password_hash(
+                    input.pswd_noz44,
+                    sizeof(input.pswd_noz44),
+                    binding == AccountPasswordHashBinding::AccountNo,
+                    hash_error)) {
+                logger_.error("s8180 account password hash fill failed: " + hash_error);
+                attempt.fatal_error = true;
+                attempt.page_error = "계좌 비밀번호 해시 생성 실패";
+                attempt.diagnostic.classification = "hash_generation_failed";
+                attempt.diagnostic.candidate_cause =
+                    binding == AccountPasswordHashBinding::AccountNo
+                        ? "account_no_hash_generation_failed"
+                        : "index_hash_generation_failed";
+                attempt.diagnostic.failure_reason = hash_error;
+                return attempt;
             }
-            logger_.error("wait_for_event failed: " + wait_error);
-            page_error = "이벤트 대기 실패";
-            auth_.drain_events_for_tr(tr_index, 500, "s8180 wait_for_event failed");
-            return false;
+            attempt.diagnostic.hash_generation_ok = true;
+            password_len = sizeof(input.pswd_noz44);
+        } else if (password_mode == S8180PasswordMode::Plain) {
+            attempt.diagnostic.hash_generation_ok = true;
+            password_len = auth_.account_password().size();
+            set_fixed_field(input.pswd_noz44, auth_.account_password());
+        } else {
+            attempt.diagnostic.hash_generation_ok = true;
+            set_fixed_field(input.pswd_noz44, "");
         }
 
         logger_.info(
-            "s8180 event tr_index=" + std::to_string(event.tr_index) +
-            " code=" + event_code_name(event.code) +
-            " block_name=" + (event.block_name.empty() ? std::string("<empty>") : event.block_name) +
-            " data_len=" + std::to_string(event.data_len));
+            "s8180 password mode=" + std::string(s8180_password_mode_name(password_mode)) +
+            " hash_binding=" + std::string(
+                password_mode == S8180PasswordMode::Encrypted
+                    ? account_password_hash_binding_name(binding)
+                    : "n/a") +
+            " account_index=" + std::to_string(auth_.account_index()) +
+            " account_no=" + auth_.account_no() +
+            " source_len=" + std::to_string(password_len));
+        logger_.info(
+            "s8180 password account_index=" + std::to_string(auth_.account_index()) +
+            " account_no=" + auth_.account_no() +
+            " hash_binding=" + std::string(
+                password_mode == S8180PasswordMode::Encrypted
+                    ? account_password_hash_binding_name(binding)
+                    : "n/a") +
+            " encrypted_len=" + std::to_string(password_mode == S8180PasswordMode::Encrypted ? password_len : 0));
 
-        if (event.code == CA_RECEIVEMESSAGE) {
-            if (event.tr_index == tr_index && !event.data.empty() &&
-                event.data_len >= static_cast<int>(sizeof(MessageHeader))) {
-                const auto* header = reinterpret_cast<const MessageHeader*>(event.data.data());
-                const std::string code = trim(cp949_to_utf8(header->message_code, static_cast<int>(sizeof(header->message_code))));
-                const std::string msg = trim(cp949_to_utf8(header->message, static_cast<int>(sizeof(header->message))));
-                logger_.info("s8180 message [" + code + "] " + msg);
-                if (code == "10009" || code == "21263" || msg.find("계좌비밀번호") != std::string::npos) {
-                    logger_.error("s8180 account password rejected: " + msg);
-                    fatal_error = true;
-                    page_error = "계좌 비밀번호 오류";
-                    auth_.drain_events_for_tr(tr_index, 1000, "s8180 account password rejected");
-                    return false;
-                }
+        set_fixed_field(input.group_noz4, env_or_default("QV_GROUP_NO", "0000"));
+        set_fixed_field(input.mkt_slctz1, env_or_default("QV_MKT_SLCT", "0"));
+        set_fixed_field(input.order_datez8, trade_date);
+        set_fixed_field(input.issue_codez12, env_or_empty("QV_ISSUE_CODE"));
+        set_fixed_field(input.comm_order_typez2, env_or_default("QV_MEDIA_GUBUN", "CC"));
+        set_fixed_field(input.conc_gubunz1, env_or_default("QV_CONC_GUBUN", "2"));
+        set_fixed_field(input.inq_seq_gubunz1, env_or_default("QV_INQ_SEQ", "0"));
+        set_fixed_field(input.sort_gubunz1, env_or_default("QV_SORT_GUBUN", "0"));
+        set_fixed_field(input.sell_buy_typez1, env_or_default("QV_SELL_BUY", "0"));
+        set_fixed_field(input.mrgn_typez1, env_or_default("QV_MRGN_TYPE", "0"));
+        set_fixed_field(input.accnt_admin_typez1, env_or_default("QV_ACCNT_ADMIN", "0"));
+        set_fixed_field(input.order_noz10, env_or_empty("QV_ORDER_NO"));
+        set_fixed_field(input.ctsz56, cts);
+        set_fixed_field(input.trad_pswd1z44, env_or_empty("QV_TRADE_PASSWORD1"));
+        set_fixed_field(input.trad_pswd2z44, env_or_empty("QV_TRADE_PASSWORD2"));
+        set_fixed_field(input.IsPageUp, is_page_up ? "N" : "");
+
+        logger_.info(
+            "Submitting s8180 tr_index=" + std::to_string(tr_index) +
+            " trade_date=" + trade_date +
+            " cts=" + (cts.empty() ? std::string("<empty>") : cts) +
+            " is_page_up=" + std::string(is_page_up ? "Y" : "N"));
+
+        if (!auth_.submit_query(tr_index, tr_code, &input, static_cast<int>(sizeof(input)))) {
+            logger_.error("submit_query failed for tr=" + tr_code);
+            attempt.page_error = "TR 제출 실패";
+            attempt.diagnostic.classification = "query_submit_failed";
+            attempt.diagnostic.candidate_cause = "query_submission_failed";
+            attempt.diagnostic.failure_reason = "submit_query failed";
+            return attempt;
+        }
+        attempt.diagnostic.query_submitted = true;
+
+        const auto start = std::chrono::steady_clock::now();
+
+        while (true) {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - start);
+            if (elapsed.count() >= timeout_ms) {
+                logger_.error("s8180 query timeout");
+                attempt.page_error = "TR 조회 타임아웃";
+                attempt.diagnostic.classification = "query_timeout";
+                attempt.diagnostic.candidate_cause = "transport_or_contract_issue";
+                attempt.diagnostic.failure_reason = attempt.page_error;
+                auth_.drain_events_for_tr(tr_index, 500, "s8180 timeout");
+                return attempt;
             }
+
+            QVEvent event;
+            std::string wait_error;
+            if (!auth_.wait_for_event(event, 500, wait_error)) {
+                if (wait_error.rfind("timeout", 0) == 0) {
+                    continue;
+                }
+                logger_.error("wait_for_event failed: " + wait_error);
+                attempt.page_error = "이벤트 대기 실패";
+                attempt.diagnostic.classification = "event_wait_failed";
+                attempt.diagnostic.candidate_cause = "transport_or_contract_issue";
+                attempt.diagnostic.failure_reason = wait_error;
+                auth_.drain_events_for_tr(tr_index, 500, "s8180 wait_for_event failed");
+                return attempt;
+            }
+
+            logger_.info(
+                "s8180 event tr_index=" + std::to_string(event.tr_index) +
+                " code=" + event_code_name(event.code) +
+                " block_name=" + (event.block_name.empty() ? std::string("<empty>") : event.block_name) +
+                " data_len=" + std::to_string(event.data_len));
+
+            if (event.code == CA_RECEIVEMESSAGE) {
+                if (event.tr_index == tr_index && !event.data.empty() &&
+                    event.data_len >= static_cast<int>(sizeof(MessageHeader))) {
+                    const auto* header = reinterpret_cast<const MessageHeader*>(event.data.data());
+                    const std::string code =
+                        trim(cp949_to_utf8(header->message_code, static_cast<int>(sizeof(header->message_code))));
+                    const std::string msg =
+                        trim(cp949_to_utf8(header->message, static_cast<int>(sizeof(header->message))));
+                    attempt.diagnostic.server_message_code = code;
+                    attempt.diagnostic.server_message = msg;
+                    logger_.info("s8180 message [" + code + "] " + msg);
+                    if (is_password_rejected_message(code, msg)) {
+                        logger_.error("s8180 account password rejected: " + msg);
+                        attempt.fatal_error = true;
+                        attempt.password_rejected = true;
+                        attempt.page_error = "계좌 비밀번호 오류";
+                        attempt.diagnostic.classification = "account_password_rejected";
+                        attempt.diagnostic.candidate_cause = "binding_mismatch_or_ineligible_account";
+                        attempt.diagnostic.failure_reason = msg.empty() ? attempt.page_error : msg;
+                        auth_.drain_events_for_tr(tr_index, 1000, "s8180 account password rejected");
+                        return attempt;
+                    }
+                }
+                continue;
+            }
+
+            if (event.code == CA_RECEIVEERROR) {
+                if (event.tr_index == tr_index && !event.data.empty()) {
+                    attempt.diagnostic.failure_reason = cstr_cp949(event.data.data());
+                    logger_.error("s8180 error: " + attempt.diagnostic.failure_reason);
+                } else {
+                    attempt.diagnostic.failure_reason = "s8180 receive error";
+                    logger_.error("s8180 receive error");
+                }
+                attempt.fatal_error = true;
+                attempt.page_error = "TR 수신 오류";
+                attempt.diagnostic.classification = "receive_error";
+                attempt.diagnostic.candidate_cause = "tr_runtime_error";
+                auth_.drain_events_for_tr(tr_index, 1000, "s8180 receive error");
+                return attempt;
+            }
+
+            if (event.code == CA_RECEIVEDATA) {
+                if (event.tr_index != tr_index || event.data.empty()) {
+                    continue;
+                }
+
+                const std::string block_name = lower_ascii(event.block_name);
+                const char* payload = event.data.data();
+                const int payload_len = event.data_len;
+
+                logger_.info(
+                    "s8180 received data block_name=" + (block_name.empty() ? std::string("<empty>") : block_name) +
+                    " payload_len=" + std::to_string(payload_len));
+
+                if (block_name.find("outblock1") != std::string::npos) {
+                    const int row_size = static_cast<int>(sizeof(Ts8180OutBlock1));
+                    if (payload_len < row_size) {
+                        logger_.warn(
+                            "s8180 outblock1 too short payload_len=" + std::to_string(payload_len) +
+                            " row_size=" + std::to_string(row_size));
+                        continue;
+                    }
+                    if (payload_len % row_size != 0) {
+                        logger_.warn("s8180 outblock1 length is not aligned: " + std::to_string(payload_len));
+                    }
+
+                    const int count = payload_len / row_size;
+                    logger_.info(
+                        "s8180 parsing outblock1 count=" + std::to_string(count) +
+                        " row_size=" + std::to_string(row_size));
+                    const auto* rows = reinterpret_cast<const Ts8180OutBlock1*>(payload);
+                    for (int i = 0; i < count; ++i) {
+                        const Ts8180OutBlock1& row = rows[i];
+                        ExecutionRecord exec;
+                        exec.account_no = auth_.account_no();
+                        exec.order_no = normalize_order_no(fixed_cp949_field(row.order_noz10));
+                        exec.orig_order_no = normalize_order_no(fixed_cp949_field(row.orgnl_order_noz10));
+                        exec.order_type = fixed_cp949_field(row.order_kindz20);
+                        exec.stock_code = normalize_stock_code(fixed_cp949_field(row.issue_codez12));
+                        exec.stock_name = fixed_cp949_field(row.issue_namez40);
+                        exec.order_qty = parse_number(fixed_cp949_field(row.order_qtyz10));
+                        exec.exec_qty = parse_number(fixed_cp949_field(row.conc_qtyz10));
+                        exec.order_price = parse_number(fixed_cp949_field(row.order_unit_pricez12));
+                        exec.exec_avg_price = parse_number(fixed_cp949_field(row.conc_unit_pricez12));
+                        exec.exec_time = normalize_time(fixed_cp949_field(row.proc_timez8));
+                        exec.market_code = map_s8180_market(row);
+                        exec.sor_split = upper_ascii(fixed_cp949_field(row.sor_split_ynz1));
+                        if (exec.sor_split.empty()) {
+                            exec.sor_split = "N";
+                        }
+
+                        if (exec.exec_qty > 0) {
+                            logger_.info(
+                                "s8180 row accepted order_no=" + exec.order_no +
+                                " order_type=" + exec.order_type +
+                                " stock=" + exec.stock_code +
+                                " exec_qty=" + std::to_string(exec.exec_qty) +
+                                " exec_avg_price=" + std::to_string(exec.exec_avg_price));
+                            attempt.page_out.push_back(exec);
+                        } else {
+                            logger_.warn(
+                                "s8180 row skipped order_no=" + exec.order_no +
+                                " order_type=" + exec.order_type +
+                                " stock=" + exec.stock_code +
+                                " order_qty=" + std::to_string(exec.order_qty) +
+                                " exec_qty=" + std::to_string(exec.exec_qty) +
+                                " exec_avg_price=" + std::to_string(exec.exec_avg_price));
+                        }
+                    }
+                    continue;
+                }
+
+                if (block_name.find("outblock_in") != std::string::npos ||
+                    block_name.find("outblock2") != std::string::npos ||
+                    block_name.find("outblock3") != std::string::npos) {
+                    if (payload_len >= static_cast<int>(sizeof(Ts8180OutBlockIN))) {
+                        const auto* block = reinterpret_cast<const Ts8180OutBlockIN*>(payload);
+                        attempt.next_cts = trim(cp949_to_utf8(block->ctsz56, static_cast<int>(sizeof(block->ctsz56))));
+                        const std::string next =
+                            trim(cp949_to_utf8(block->nextbutton, static_cast<int>(sizeof(block->nextbutton))));
+                        attempt.has_more = !next.empty();
+                        attempt.diagnostic.next_cts = attempt.next_cts;
+                        logger_.info(
+                            "s8180 paging block parsed block_name=" + block_name +
+                            " next_cts=" + (attempt.next_cts.empty() ? std::string("<empty>") : attempt.next_cts) +
+                            " nextbutton=" + (next.empty() ? std::string("<empty>") : next) +
+                            " has_more=" + std::string(attempt.has_more ? "Y" : "N"));
+                    } else {
+                        logger_.warn(
+                            "s8180 paging block too short block_name=" + block_name +
+                            " payload_len=" + std::to_string(payload_len));
+                    }
+                    continue;
+                }
+
+                logger_.warn(
+                    "s8180 unhandled data block block_name=" +
+                    (block_name.empty() ? std::string("<empty>") : block_name) +
+                    " payload_len=" + std::to_string(payload_len) +
+                    " payload_preview=" + hex_preview(payload, payload_len));
+            }
+
+            if (event.code == CA_RECEIVECOMPLETE && event.tr_index == tr_index) {
+                logger_.info(
+                    "s8180 receive complete page_records=" + std::to_string(attempt.page_out.size()) +
+                    " next_cts=" + (attempt.next_cts.empty() ? std::string("<empty>") : attempt.next_cts) +
+                    " has_more=" + std::string(attempt.has_more ? "Y" : "N"));
+                if (attempt.page_out.empty()) {
+                    logger_.warn("s8180 completed with zero parsed executions for this page");
+                }
+                attempt.success = true;
+                attempt.diagnostic.query_succeeded = true;
+                attempt.diagnostic.parsed_record_count = static_cast<int>(attempt.page_out.size());
+                attempt.diagnostic.classification = "success";
+                attempt.diagnostic.candidate_cause = "none";
+                return attempt;
+            }
+        }
+    };
+
+    std::vector<S8180AttemptDiagnostic> attempt_diagnostics;
+    const std::vector<AccountPasswordHashBinding> bindings =
+        password_mode == S8180PasswordMode::Encrypted && requested_binding == AccountPasswordHashBinding::AutoProbe
+            ? std::vector<AccountPasswordHashBinding>{AccountPasswordHashBinding::Index, AccountPasswordHashBinding::AccountNo}
+            : std::vector<AccountPasswordHashBinding>{
+                  requested_binding == AccountPasswordHashBinding::AutoProbe
+                      ? AccountPasswordHashBinding::Index
+                      : requested_binding};
+    auto publish_diagnostic = [&]() {
+        last_s8180_diagnostic_ =
+            build_overall_diagnostic(trade_date, selected_account, requested_binding, password_mode, attempt_diagnostics);
+        has_last_s8180_diagnostic_ = true;
+    };
+
+    for (std::size_t i = 0; i < bindings.size(); ++i) {
+        const auto binding = bindings[i];
+        S8180AttemptResult attempt = run_attempt(binding);
+        attempt_diagnostics.push_back(attempt.diagnostic);
+        publish_diagnostic();
+
+        if (attempt.success) {
+            page_out = std::move(attempt.page_out);
+            next_cts = std::move(attempt.next_cts);
+            has_more = attempt.has_more;
+            return true;
+        }
+
+        if (requested_binding == AccountPasswordHashBinding::AutoProbe &&
+            i == 0 &&
+            attempt.password_rejected &&
+            bindings.size() > 1) {
+            logger_.warn("s8180 auto_probe retry with account_no hash binding after index rejection");
             continue;
         }
 
-        if (event.code == CA_RECEIVEERROR) {
-            if (event.tr_index == tr_index && !event.data.empty()) {
-                logger_.error("s8180 error: " + cstr_cp949(event.data.data()));
-            } else {
-                logger_.error("s8180 receive error");
-            }
-            fatal_error = true;
-            if (page_error.empty()) {
-                page_error = "TR 수신 오류";
-            }
-            auth_.drain_events_for_tr(tr_index, 1000, "s8180 receive error");
-            return false;
-        }
-
-        if (event.code == CA_RECEIVEDATA) {
-            if (event.tr_index != tr_index || event.data.empty()) {
-                continue;
-            }
-
-            const std::string block_name = lower_ascii(event.block_name);
-            const char* payload = event.data.data();
-            const int payload_len = event.data_len;
-
-            logger_.info(
-                "s8180 received data block_name=" + (block_name.empty() ? std::string("<empty>") : block_name) +
-                " payload_len=" + std::to_string(payload_len));
-
-            if (block_name.find("outblock1") != std::string::npos) {
-                const int row_size = static_cast<int>(sizeof(Ts8180OutBlock1));
-                if (payload_len < row_size) {
-                    logger_.warn(
-                        "s8180 outblock1 too short payload_len=" + std::to_string(payload_len) +
-                        " row_size=" + std::to_string(row_size));
-                    continue;
-                }
-                if (payload_len % row_size != 0) {
-                    logger_.warn("s8180 outblock1 length is not aligned: " + std::to_string(payload_len));
-                }
-
-                const int count = payload_len / row_size;
-                logger_.info(
-                    "s8180 parsing outblock1 count=" + std::to_string(count) +
-                    " row_size=" + std::to_string(row_size));
-                const auto* rows = reinterpret_cast<const Ts8180OutBlock1*>(payload);
-                for (int i = 0; i < count; ++i) {
-                    const Ts8180OutBlock1& row = rows[i];
-                    ExecutionRecord exec;
-                    exec.account_no = auth_.account_no();
-                    exec.order_no = normalize_order_no(fixed_cp949_field(row.order_noz10));
-                    exec.orig_order_no = normalize_order_no(fixed_cp949_field(row.orgnl_order_noz10));
-                    exec.order_type = fixed_cp949_field(row.order_kindz20);
-                    exec.stock_code = normalize_stock_code(fixed_cp949_field(row.issue_codez12));
-                    exec.stock_name = fixed_cp949_field(row.issue_namez40);
-                    exec.order_qty = parse_number(fixed_cp949_field(row.order_qtyz10));
-                    exec.exec_qty = parse_number(fixed_cp949_field(row.conc_qtyz10));
-                    exec.order_price = parse_number(fixed_cp949_field(row.order_unit_pricez12));
-                    exec.exec_avg_price = parse_number(fixed_cp949_field(row.conc_unit_pricez12));
-                    exec.exec_time = normalize_time(fixed_cp949_field(row.proc_timez8));
-                    exec.market_code = map_s8180_market(row);
-                    exec.sor_split = upper_ascii(fixed_cp949_field(row.sor_split_ynz1));
-                    if (exec.sor_split.empty()) {
-                        exec.sor_split = "N";
-                    }
-
-                    if (exec.exec_qty > 0) {
-                        logger_.info(
-                            "s8180 row accepted order_no=" + exec.order_no +
-                            " order_type=" + exec.order_type +
-                            " stock=" + exec.stock_code +
-                            " exec_qty=" + std::to_string(exec.exec_qty) +
-                            " exec_avg_price=" + std::to_string(exec.exec_avg_price));
-                        page_out.push_back(exec);
-                    } else {
-                        logger_.warn(
-                            "s8180 row skipped order_no=" + exec.order_no +
-                            " order_type=" + exec.order_type +
-                            " stock=" + exec.stock_code +
-                            " order_qty=" + std::to_string(exec.order_qty) +
-                            " exec_qty=" + std::to_string(exec.exec_qty) +
-                            " exec_avg_price=" + std::to_string(exec.exec_avg_price));
-                    }
-                }
-                continue;
-            }
-
-            if (block_name.find("outblock_in") != std::string::npos ||
-                block_name.find("outblock2") != std::string::npos ||
-                block_name.find("outblock3") != std::string::npos) {
-                if (payload_len >= static_cast<int>(sizeof(Ts8180OutBlockIN))) {
-                    const auto* block = reinterpret_cast<const Ts8180OutBlockIN*>(payload);
-                    next_cts = trim(cp949_to_utf8(block->ctsz56, static_cast<int>(sizeof(block->ctsz56))));
-                    const std::string next = trim(cp949_to_utf8(block->nextbutton, static_cast<int>(sizeof(block->nextbutton))));
-                    has_more = !next.empty();
-                    logger_.info(
-                        "s8180 paging block parsed block_name=" + block_name +
-                        " next_cts=" + (next_cts.empty() ? std::string("<empty>") : next_cts) +
-                        " nextbutton=" + (next.empty() ? std::string("<empty>") : next) +
-                        " has_more=" + std::string(has_more ? "Y" : "N"));
-                } else {
-                    logger_.warn(
-                        "s8180 paging block too short block_name=" + block_name +
-                        " payload_len=" + std::to_string(payload_len));
-                }
-                continue;
-            }
-
-            logger_.warn(
-                "s8180 unhandled data block block_name=" + (block_name.empty() ? std::string("<empty>") : block_name) +
-                " payload_len=" + std::to_string(payload_len) +
-                " payload_preview=" + hex_preview(payload, payload_len));
-        }
-
-        if (event.code == CA_RECEIVECOMPLETE) {
-            if (event.tr_index == tr_index) {
-                logger_.info(
-                    "s8180 receive complete page_records=" + std::to_string(page_out.size()) +
-                    " next_cts=" + (next_cts.empty() ? std::string("<empty>") : next_cts) +
-                    " has_more=" + std::string(has_more ? "Y" : "N"));
-                if (page_out.empty()) {
-                    logger_.warn("s8180 completed with zero parsed executions for this page");
-                }
-                return true;
-            }
-        }
+        fatal_error = attempt.fatal_error;
+        page_error = attempt.page_error;
+        return false;
     }
+
+    publish_diagnostic();
+    fatal_error = true;
+    page_error = "s8180 진단 시도 실패";
+    return false;
 #endif
 }
 

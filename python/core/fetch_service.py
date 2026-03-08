@@ -28,6 +28,13 @@ class LoginCredentials:
 class AccountInfo:
     account_index: int
     account_no: str
+    account_name: str = ""
+    act_pdt_cd: str = ""
+    amn_tab_cd: str = ""
+    expr_date: str = ""
+    granted: str = ""
+    is_granted_batch: bool = False
+    diagnostic_labels: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -35,6 +42,13 @@ class AccountSelection:
     account_index: int
     account_no: str
     account_password: str
+    account_name: str = ""
+    act_pdt_cd: str = ""
+    amn_tab_cd: str = ""
+    expr_date: str = ""
+    granted: str = ""
+    is_granted_batch: bool = False
+    diagnostic_labels: list[str] = field(default_factory=list)
 
 
 ERROR_MAP = {
@@ -138,7 +152,23 @@ class FetchService:
             account_no = str(item.get("account_no") or "").strip()
             if not account_no:
                 continue
-            parsed.append(AccountInfo(account_index=account_index, account_no=account_no))
+            raw_labels = item.get("diagnostic_labels")
+            diagnostic_labels = []
+            if isinstance(raw_labels, list):
+                diagnostic_labels = [str(label).strip() for label in raw_labels if str(label).strip()]
+            parsed.append(
+                AccountInfo(
+                    account_index=account_index,
+                    account_no=account_no,
+                    account_name=str(item.get("account_name") or "").strip(),
+                    act_pdt_cd=str(item.get("act_pdt_cd") or "").strip(),
+                    amn_tab_cd=str(item.get("amn_tab_cd") or "").strip(),
+                    expr_date=str(item.get("expr_date") or "").strip(),
+                    granted=str(item.get("granted") or "").strip(),
+                    is_granted_batch=bool(item.get("is_granted_batch")),
+                    diagnostic_labels=diagnostic_labels,
+                )
+            )
         if not parsed:
             raise FetchError("로그인 계좌 목록이 비어 있습니다.")
         return parsed

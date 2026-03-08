@@ -194,6 +194,51 @@ std::string escape_json(const std::string& src) {
     return out;
 }
 
+bool is_truthy(const std::string& value) {
+    std::string normalized = trim(value);
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on";
+}
+
+bool diagnostic_output_enabled() {
+    return is_truthy(env_or_empty("QV_DIAGNOSTIC_MODE")) || !trim(env_or_empty("QV_DIAGNOSTIC_OUTPUT")).empty();
+}
+
+std::string resolve_diagnostic_output_path(const std::string& output_path) {
+    const std::string configured = trim(env_or_empty("QV_DIAGNOSTIC_OUTPUT"));
+    if (!configured.empty()) {
+        return configured;
+    }
+    return output_path + ".diagnostic.json";
+}
+
+void write_session_string_array(std::ostringstream& out, const std::vector<std::string>& values) {
+    out << "[";
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        out << "\"" << escape_json(values[i]) << "\"";
+        if (i + 1 < values.size()) {
+            out << ",";
+        }
+    }
+    out << "]";
+}
+
+void write_session_account(std::ostringstream& out, const QVAccount& account) {
+    out << "{\"account_index\":" << account.account_index
+        << ",\"account_no\":\"" << escape_json(account.account_no) << "\""
+        << ",\"account_name\":\"" << escape_json(account.account_name) << "\""
+        << ",\"act_pdt_cd\":\"" << escape_json(account.act_pdt_cd) << "\""
+        << ",\"amn_tab_cd\":\"" << escape_json(account.amn_tab_cd) << "\""
+        << ",\"expr_date\":\"" << escape_json(account.expr_date) << "\""
+        << ",\"granted\":\"" << escape_json(account.granted) << "\""
+        << ",\"is_granted_batch\":" << (account.is_granted_batch ? "true" : "false")
+        << ",\"diagnostic_labels\":";
+    write_session_string_array(out, account.diagnostic_labels);
+    out << "}";
+}
+
 void write_session_error(const std::string& message) {
     std::cout << "{\"ok\":false,\"error\":\"" << escape_json(message) << "\"}" << std::endl;
 }
@@ -202,9 +247,7 @@ void write_session_accounts(const std::vector<QVAccount>& accounts) {
     std::ostringstream out;
     out << "{\"ok\":true,\"accounts\":[";
     for (std::size_t i = 0; i < accounts.size(); ++i) {
-        const auto& account = accounts[i];
-        out << "{\"account_index\":" << account.account_index
-            << ",\"account_no\":\"" << escape_json(account.account_no) << "\"}";
+        write_session_account(out, accounts[i]);
         if (i + 1 < accounts.size()) {
             out << ",";
         }
@@ -277,7 +320,19 @@ bool run_batch_query(QVAuth& auth,
     std::vector<ExecutionRecord> executions;
     std::vector<std::string> messages;
     std::vector<QVAccount> queried_accounts;
+    std::vector<S8180Diagnostic> diagnostics;
     int success_count = 0;
+
+    const auto flush_diagnostics = [&]() {
+        if (!diagnostic_output_enabled() || diagnostics.empty()) {
+            return;
+        }
+        JsonExport::write_s8180_diagnostics_atomic(
+            resolve_diagnostic_output_path(output_path),
+            trade_date,
+            diagnostics,
+            logger);
+    };
 
     for (const auto& selection : batch_accounts) {
         std::string activate_error;
@@ -288,7 +343,7 @@ bool run_batch_query(QVAuth& auth,
             continue;
         }
 
-        queried_accounts.push_back(QVAccount{auth.account_index(), auth.account_no()});
+        queried_accounts.push_back(auth.active_account());
         logger.info(
             "Batch account query start account_index=" + std::to_string(auth.account_index()) +
             " account_no=" + auth.account_no());
@@ -296,6 +351,9 @@ bool run_batch_query(QVAuth& auth,
         std::vector<ExecutionRecord> per_account_executions;
         std::vector<std::string> per_account_warnings;
         if (!query.fetch_executions(trade_date, per_account_executions, per_account_warnings)) {
+            if (query.has_last_s8180_diagnostic()) {
+                diagnostics.push_back(query.last_s8180_diagnostic());
+            }
             std::string account_error = "TR 조회 실패";
             if (!per_account_warnings.empty()) {
                 account_error = per_account_warnings.back();
@@ -306,6 +364,10 @@ bool run_batch_query(QVAuth& auth,
             continue;
         }
 
+        if (query.has_last_s8180_diagnostic()) {
+            diagnostics.push_back(query.last_s8180_diagnostic());
+        }
+
         executions.insert(executions.end(), per_account_executions.begin(), per_account_executions.end());
         for (const auto& warning : per_account_warnings) {
             messages.push_back(auth.account_no() + ": " + warning);
@@ -314,6 +376,7 @@ bool run_batch_query(QVAuth& auth,
     }
 
     if (success_count == 0) {
+        flush_diagnostics();
         error_message = "All batch account queries failed.";
         logger.error(error_message);
         return false;
@@ -330,9 +393,12 @@ bool run_batch_query(QVAuth& auth,
             executions,
             messages,
             logger)) {
+        flush_diagnostics();
         error_message = "failed to write output JSON";
         return false;
     }
+
+    flush_diagnostics();
 
     logger.info(
         "fetch.exe completed successfully. records=" + std::to_string(executions.size()) +
@@ -587,6 +653,13 @@ int main(int argc, char* argv[]) {
         std::vector<ExecutionRecord> executions;
         std::vector<std::string> warnings;
         if (!query.fetch_executions(args.date, executions, warnings)) {
+            if (diagnostic_output_enabled() && query.has_last_s8180_diagnostic()) {
+                JsonExport::write_s8180_diagnostics_atomic(
+                    resolve_diagnostic_output_path(args.output),
+                    args.date,
+                    std::vector<S8180Diagnostic>{query.last_s8180_diagnostic()},
+                    logger);
+            }
             logger.error("s8180 query failed after retry.");
             return EXIT_TR_FAILED;
         }
@@ -595,11 +668,19 @@ int main(int argc, char* argv[]) {
                 args.output,
                 args.date,
                 auth.account_no(),
-                std::vector<QVAccount>{QVAccount{auth.account_index(), auth.account_no()}},
+                std::vector<QVAccount>{auth.active_account()},
                 executions,
                 warnings,
                 logger)) {
             return EXIT_JSON_WRITE_FAILED;
+        }
+
+        if (diagnostic_output_enabled() && query.has_last_s8180_diagnostic()) {
+            JsonExport::write_s8180_diagnostics_atomic(
+                resolve_diagnostic_output_path(args.output),
+                args.date,
+                std::vector<S8180Diagnostic>{query.last_s8180_diagnostic()},
+                logger);
         }
 
         logger.info("fetch.exe completed successfully. records=" + std::to_string(executions.size()));

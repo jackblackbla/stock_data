@@ -63,6 +63,108 @@ void write_number(std::ofstream& out, const std::string& key, long long value, b
         out << ",";
     }
 }
+
+void write_bool(std::ofstream& out, const std::string& key, bool value, bool comma = true) {
+    out << "\"" << key << "\":" << (value ? "true" : "false");
+    if (comma) {
+        out << ",";
+    }
+}
+
+void write_string_array(std::ofstream& out,
+                        const std::string& key,
+                        const std::vector<std::string>& values,
+                        bool comma = true) {
+    out << "\"" << key << "\":[";
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        out << "\"" << escape_json(values[i]) << "\"";
+        if (i + 1 < values.size()) {
+            out << ",";
+        }
+    }
+    out << "]";
+    if (comma) {
+        out << ",";
+    }
+}
+
+void write_account(std::ofstream& out, const QVAccount& account, bool comma = true) {
+    out << "{";
+    write_number(out, "account_index", account.account_index);
+    write_string(out, "account_no", account.account_no);
+    write_string(out, "account_name", account.account_name);
+    write_string(out, "act_pdt_cd", account.act_pdt_cd);
+    write_string(out, "amn_tab_cd", account.amn_tab_cd);
+    write_string(out, "expr_date", account.expr_date);
+    write_string(out, "granted", account.granted);
+    write_bool(out, "is_granted_batch", account.is_granted_batch);
+    write_string_array(out, "diagnostic_labels", account.diagnostic_labels, false);
+    out << "}";
+    if (comma) {
+        out << ",";
+    }
+}
+
+void write_s8180_attempt(std::ofstream& out, const S8180AttemptDiagnostic& attempt, bool comma = true) {
+    out << "{";
+    write_string(out, "binding_mode", attempt.binding_mode);
+    write_string(out, "hash_source", attempt.hash_source);
+    write_string(out, "password_mode", attempt.password_mode);
+    write_bool(out, "hash_generation_ok", attempt.hash_generation_ok);
+    write_bool(out, "query_submitted", attempt.query_submitted);
+    write_bool(out, "query_succeeded", attempt.query_succeeded);
+    write_number(out, "tr_index", attempt.tr_index);
+    write_bool(out, "is_page_up", attempt.is_page_up);
+    write_number(out, "parsed_record_count", attempt.parsed_record_count);
+    write_string(out, "page_cts", attempt.page_cts);
+    write_string(out, "next_cts", attempt.next_cts);
+    write_string(out, "server_message_code", attempt.server_message_code);
+    write_string(out, "server_message", attempt.server_message);
+    write_string(out, "classification", attempt.classification);
+    write_string(out, "candidate_cause", attempt.candidate_cause);
+    write_string(out, "failure_reason", attempt.failure_reason, false);
+    out << "}";
+    if (comma) {
+        out << ",";
+    }
+}
+
+void write_s8180_diagnostic_body(std::ofstream& out, const S8180Diagnostic& diagnostic, bool comma = true) {
+    out << "{";
+    write_string(out, "binding_mode", diagnostic.binding_mode);
+    write_string(out, "binding_mode_requested", diagnostic.binding_mode_requested);
+    write_string(out, "password_mode", diagnostic.password_mode);
+    write_bool(out, "hash_generation_ok", diagnostic.hash_generation_ok);
+    write_bool(out, "query_submitted", diagnostic.query_submitted);
+    write_bool(out, "query_succeeded", diagnostic.query_succeeded);
+    write_string(out, "hash_source", diagnostic.hash_source);
+    write_string(out, "server_message_code", diagnostic.server_message_code);
+    write_string(out, "server_message", diagnostic.server_message);
+    write_string(out, "classification", diagnostic.classification);
+    write_string(out, "candidate_cause", diagnostic.candidate_cause);
+    write_string(out, "failure_reason", diagnostic.failure_reason);
+    out << "\"attempts\":[";
+    for (std::size_t i = 0; i < diagnostic.attempts.size(); ++i) {
+        write_s8180_attempt(out, diagnostic.attempts[i], i + 1 < diagnostic.attempts.size());
+    }
+    out << "]";
+    out << "}";
+    if (comma) {
+        out << ",";
+    }
+}
+
+void write_s8180_diagnostic_entry(std::ofstream& out, const S8180Diagnostic& diagnostic, bool comma = true) {
+    out << "{";
+    out << "\"selected_account\":";
+    write_account(out, diagnostic.selected_account, false);
+    out << ",\"s8180_diagnostic\":";
+    write_s8180_diagnostic_body(out, diagnostic, false);
+    out << "}";
+    if (comma) {
+        out << ",";
+    }
+}
 }  // namespace
 
 bool JsonExport::write_accounts_atomic(const std::string& output_path,
@@ -87,14 +189,7 @@ bool JsonExport::write_accounts_atomic(const std::string& output_path,
         write_string(out, "generated_at", now_iso_local());
         out << "\"accounts\":[";
         for (std::size_t i = 0; i < accounts.size(); ++i) {
-            const auto& account = accounts[i];
-            out << "{";
-            write_number(out, "account_index", account.account_index);
-            write_string(out, "account_no", account.account_no, false);
-            out << "}";
-            if (i + 1 < accounts.size()) {
-                out << ",";
-            }
+            write_account(out, accounts[i], i + 1 < accounts.size());
         }
         out << "]";
         out << "}";
@@ -162,14 +257,7 @@ bool JsonExport::write_atomic(const std::string& output_path,
 
         out << "\"accounts\":[";
         for (std::size_t i = 0; i < accounts.size(); ++i) {
-            const auto& account = accounts[i];
-            out << "{";
-            write_number(out, "account_index", account.account_index);
-            write_string(out, "account_no", account.account_no, false);
-            out << "}";
-            if (i + 1 < accounts.size()) {
-                out << ",";
-            }
+            write_account(out, accounts[i], i + 1 < accounts.size());
         }
         out << "],";
 
@@ -234,6 +322,66 @@ bool JsonExport::write_atomic(const std::string& output_path,
         return true;
     } catch (const std::exception& ex) {
         logger.error(std::string("JSON export exception: ") + ex.what());
+        return false;
+    }
+}
+
+bool JsonExport::write_s8180_diagnostics_atomic(const std::string& output_path,
+                                                const std::string& trade_date,
+                                                const std::vector<S8180Diagnostic>& diagnostics,
+                                                Logger& logger) {
+    try {
+        const std::filesystem::path out_path(output_path);
+        const std::filesystem::path tmp_path = out_path.string() + ".tmp";
+
+        if (out_path.has_parent_path()) {
+            std::filesystem::create_directories(out_path.parent_path());
+        }
+
+        std::ofstream out(tmp_path, std::ios::trunc);
+        if (!out.is_open()) {
+            logger.error("Cannot open tmp file for diagnostic JSON: " + tmp_path.string());
+            return false;
+        }
+
+        out << "{";
+        write_string(out, "schema_version", "1.0");
+        write_string(out, "generated_at", now_iso_local());
+        write_string(out, "trade_date", trade_date);
+        out << "\"account_diagnostics\":[";
+        for (std::size_t i = 0; i < diagnostics.size(); ++i) {
+            write_s8180_diagnostic_entry(out, diagnostics[i], i + 1 < diagnostics.size());
+        }
+        out << "]";
+        if (diagnostics.size() == 1) {
+            out << ",";
+            out << "\"selected_account\":";
+            write_account(out, diagnostics.front().selected_account, false);
+            out << ",\"s8180_diagnostic\":";
+            write_s8180_diagnostic_body(out, diagnostics.front(), false);
+        }
+        out << "}";
+
+        out.flush();
+        out.close();
+
+        std::error_code rename_ec;
+        std::filesystem::rename(tmp_path, out_path, rename_ec);
+        if (rename_ec) {
+            std::error_code remove_ec;
+            std::filesystem::remove(out_path, remove_ec);
+            rename_ec.clear();
+            std::filesystem::rename(tmp_path, out_path, rename_ec);
+            if (rename_ec) {
+                logger.error("Atomic rename failed for diagnostic JSON.");
+                return false;
+            }
+        }
+
+        logger.info("Diagnostic JSON exported: " + out_path.string());
+        return true;
+    } catch (const std::exception& ex) {
+        logger.error(std::string("Diagnostic JSON export exception: ") + ex.what());
         return false;
     }
 }
