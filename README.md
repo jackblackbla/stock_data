@@ -66,7 +66,7 @@ CLI:
 - `QV_TRADE_PASSWORD1`, `QV_TRADE_PASSWORD2` (선택): TR 입력 거래비밀번호
 - `QV_ACCOUNT_PASSWORD` (선택): s8180 입력 계좌 비밀번호
 - `QV_S8180_PASSWORD_MODE` (기본 `encrypted`): `s8180`의 `pswd_noz44` 주입 방식. 실험용으로 `plain`, `blank`도 지원
-- `QV_ACCOUNT_PASSWORD_HASH_BINDING` (기본 `index`): `encrypted` 모드에서 계좌 비밀번호 해시를 `wmcaSetAccountIndexPwd` 또는 `wmcaSetAccountNoPwd` 중 어느 기준으로 만들지 선택. `account_no` 지원
+- `QV_ACCOUNT_PASSWORD_HASH_BINDING` (기본 `auto_probe`): `encrypted` 모드에서 계좌 비밀번호 해시를 어떤 기준으로 만들지 선택. 기본값은 `index`로 먼저 시도하고 `21263`일 때만 `account_no`를 1회 추가 시도
 
 기본 구현은 문서 기준 `s8180` 체결조회 + `s8118` 분할체결 상세 구조체 파서를 사용합니다.
 

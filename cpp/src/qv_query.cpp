@@ -233,7 +233,7 @@ const char* s8180_password_mode_name(S8180PasswordMode mode) {
 }
 
 [[maybe_unused]] AccountPasswordHashBinding resolve_account_password_hash_binding() {
-    const std::string raw = lower_ascii(trim(env_or_default("QV_ACCOUNT_PASSWORD_HASH_BINDING", "index")));
+    const std::string raw = lower_ascii(trim(env_or_default("QV_ACCOUNT_PASSWORD_HASH_BINDING", "auto_probe")));
     if (raw == "auto_probe" || raw == "auto-probe" || raw == "autoprobe") {
         return AccountPasswordHashBinding::AutoProbe;
     }
