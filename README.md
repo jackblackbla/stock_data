@@ -65,6 +65,8 @@ CLI:
 - `QV_QUERY_TIMEOUT_MS` (기본 `15000`)
 - `QV_TRADE_PASSWORD1`, `QV_TRADE_PASSWORD2` (선택): TR 입력 거래비밀번호
 - `QV_ACCOUNT_PASSWORD` (선택): s8180 입력 계좌 비밀번호
+- `QV_S8180_PASSWORD_MODE` (기본 `encrypted`): `s8180`의 `pswd_noz44` 주입 방식. 실험용으로 `plain`, `blank`도 지원
+- `QV_ACCOUNT_PASSWORD_HASH_BINDING` (기본 `index`): `encrypted` 모드에서 계좌 비밀번호 해시를 `wmcaSetAccountIndexPwd` 또는 `wmcaSetAccountNoPwd` 중 어느 기준으로 만들지 선택. `account_no` 지원
 
 기본 구현은 문서 기준 `s8180` 체결조회 + `s8118` 분할체결 상세 구조체 파서를 사용합니다.
 
@@ -93,6 +95,18 @@ s8180 페이징은 `CTS + ISPAGEUP(\"N\")` 로직을 사용합니다.
 - `scripts/build_installer.bat`: Inno Setup 설치 프로그램 생성
 - `scripts/build_release.bat`: PyInstaller + Inno Setup 일괄 빌드
 - `scripts/launch_trade_logger.bat`: 배포본 실행용 배치
+
+## Wine 컨테이너 실험
+macOS/Linux에서는 `scripts/run_fetch_wine.sh`로 Wine 컨테이너 안에서 `fetch.exe`를 빌드/실행할 수 있습니다.
+
+예시:
+- `scripts/run_fetch_wine.sh --list-accounts --output /results/accounts.json --log /results/fetch.log`
+- `QV_S8180_PASSWORD_MODE=blank scripts/run_fetch_wine.sh --date 20260306 --output /results/out.json --log /results/fetch.log`
+
+추가 전제:
+- Docker Desktop 실행 중
+- `NPKI_DIR` 환경변수로 인증서 디렉터리 지정
+- `QV_*` 로그인 환경변수는 필요 시 컨테이너로 그대로 전달됨
 
 ## 설치형 배포
 1. `scripts/build_pyinstaller.bat`

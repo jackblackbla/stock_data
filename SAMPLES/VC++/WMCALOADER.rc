@@ -1,0 +1,208 @@
+// Microsoft Visual C++ generated resource script.
+//
+#include "resource.h"
+
+#define APSTUDIO_READONLY_SYMBOLS
+/////////////////////////////////////////////////////////////////////////////
+//
+// Generated from the TEXTINCLUDE 2 resource.
+//
+#include "afxres.h"
+
+/////////////////////////////////////////////////////////////////////////////
+#undef APSTUDIO_READONLY_SYMBOLS
+
+/////////////////////////////////////////////////////////////////////////////
+// 한국어(대한민국) resources
+
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_KOR)
+LANGUAGE LANG_KOREAN, SUBLANG_DEFAULT
+#pragma code_page(949)
+
+#ifdef APSTUDIO_INVOKED
+/////////////////////////////////////////////////////////////////////////////
+//
+// TEXTINCLUDE
+//
+
+1 TEXTINCLUDE 
+BEGIN
+    "resource.h\0"
+END
+
+2 TEXTINCLUDE 
+BEGIN
+    "#include ""afxres.h""\r\n"
+    "\0"
+END
+
+3 TEXTINCLUDE 
+BEGIN
+    "#define _AFX_NO_SPLITTER_RESOURCES\r\n"
+    "#define _AFX_NO_OLE_RESOURCES\r\n"
+    "#define _AFX_NO_TRACKER_RESOURCES\r\n"
+    "#define _AFX_NO_PROPERTY_RESOURCES\r\n"
+    "\r\n"
+    "#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_KOR)\r\n"
+    "#ifdef _WIN32\r\n"
+    "LANGUAGE 18, 1\r\n"
+    "#pragma code_page(949)\r\n"
+    "#endif //_WIN32\r\n"
+    "#include ""res\\WMCALOADER.rc2""  // non-Microsoft Visual C++ edited resources\r\n"
+    "#include ""l.kor\\afxres.rc""          // Standard components\r\n"
+    "#endif\r\n"
+    "\0"
+END
+
+#endif    // APSTUDIO_INVOKED
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Icon
+//
+
+// Icon with lowest ID value placed first to ensure application icon
+// remains consistent on all systems.
+IDR_MAINFRAME           ICON                    "res\\WMCALOADER.ico"
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Dialog
+//
+
+IDD_WMCALOADER_DIALOG DIALOGEX 0, 0, 573, 306
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
+EXSTYLE WS_EX_APPWINDOW
+CAPTION "OpenAPI 사용 예제"
+FONT 9, "굴림체", 0, 0, 0x1
+BEGIN
+    EDITTEXT        IDC_EDIT_ID,53,15,64,14,ES_AUTOHSCROLL
+    EDITTEXT        IDC_EDIT_PW,53,30,64,14,ES_PASSWORD | ES_AUTOHSCROLL
+    EDITTEXT        IDC_EDIT_CERT,53,45,64,14,ES_PASSWORD | ES_AUTOHSCROLL
+    PUSHBUTTON      "접속",IDC_CONNECT,10,66,50,17,BS_FLAT
+    EDITTEXT        IDC_EDIT_JCODE,53,180,64,14,ES_AUTOHSCROLL
+    PUSHBUTTON      "현재가 조회",IDC_BUTTON_CURRENT,53,194,64,18,BS_FLAT
+    COMBOBOX        IDC_COMBOACCOUNTLIST,53,214,64,303,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    EDITTEXT        IDC_EDIT_ACCPW,53,228,64,14,ES_PASSWORD | ES_AUTOHSCROLL
+    EDITTEXT        IDC_EDIT_AMOUNT,53,243,64,14,ES_RIGHT | ES_AUTOHSCROLL | ES_NUMBER
+    EDITTEXT        IDC_EDIT_PRICE,53,259,64,14,ES_RIGHT | ES_AUTOHSCROLL | ES_NUMBER
+    PUSHBUTTON      "잔고조회",IDC_BALANCE,66,279,50,17,BS_FLAT
+    PUSHBUTTON      "매수주문",IDC_ORDER,10,279,50,17,BS_FLAT
+    PUSHBUTTON      "지우기",IDC_BUTTON_CLEAR,473,276,93,20
+    GROUPBOX        "로그인",IDC_STATIC,7,5,113,144
+    LTEXT           "아이디",IDC_STATIC,10,18,37,8
+    LTEXT           "비밀번호",IDC_STATIC,10,33,37,8
+    LTEXT           "공인인증",IDC_STATIC,10,48,37,8
+    PUSHBUTTON      "접속 해제",IDC_DISCONNECT,66,66,50,17,BS_FLAT | WS_DISABLED
+    LISTBOX         IDC_LIST1,126,7,440,260,LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP
+    GROUPBOX        "주식",IDC_STATICORDER2,7,151,115,147
+    LTEXT           "종목코드",IDC_STATIC,10,182,37,8
+    LTEXT           "계좌비번",IDC_STATIC,10,231,37,8
+    LTEXT           "수량",IDC_STATIC,10,244,37,8
+    LTEXT           "단가",IDC_STATIC,10,260,37,8
+    PUSHBUTTON      "인증서 로그인 (PC저장) ",IDC_CONNECT_LOCAL,10,87,105,17,BS_FLAT
+    PUSHBUTTON      "인증서 로그인(클라우드)",IDC_CONNECT_CLOUD,10,106,105,17,BS_FLAT
+    LTEXT           "접속시각 : ",IDC_STATICLOGIN,10,135,109,11
+    LTEXT           "계좌번호",IDC_STATIC,10,216,37,8
+    COMBOBOX        IDC_COMBO_MARKET,53,164,64,303,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "거래소",IDC_STATIC,10,168,37,8
+END
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Version
+//
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 1,0,0,1
+ PRODUCTVERSION 1,0,0,1
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x4L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "041204b0"
+        BEGIN
+            VALUE "FileDescription", "OpenAPI 사용자 예제"
+            VALUE "FileVersion", "1, 0, 0, 1"
+            VALUE "InternalName", "WMCALOADER"
+            VALUE "LegalCopyright", "Copyright (C) 2012"
+            VALUE "OriginalFilename", "WMCALOADER.EXE"
+            VALUE "ProductName", "WMCALOADER 응용 프로그램"
+            VALUE "ProductVersion", "1, 0, 0, 1"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x412, 1200
+    END
+END
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// DESIGNINFO
+//
+
+#ifdef APSTUDIO_INVOKED
+GUIDELINES DESIGNINFO
+BEGIN
+    IDD_WMCALOADER_DIALOG, DIALOG
+    BEGIN
+        LEFTMARGIN, 7
+        RIGHTMARGIN, 566
+        VERTGUIDE, 10
+        TOPMARGIN, 7
+        BOTTOMMARGIN, 296
+    END
+END
+#endif    // APSTUDIO_INVOKED
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// AFX_DIALOG_LAYOUT
+//
+
+IDD_WMCALOADER_DIALOG AFX_DIALOG_LAYOUT
+BEGIN
+    0
+END
+
+#endif    // 한국어(대한민국) resources
+/////////////////////////////////////////////////////////////////////////////
+
+
+
+#ifndef APSTUDIO_INVOKED
+/////////////////////////////////////////////////////////////////////////////
+//
+// Generated from the TEXTINCLUDE 3 resource.
+//
+#define _AFX_NO_SPLITTER_RESOURCES
+#define _AFX_NO_OLE_RESOURCES
+#define _AFX_NO_TRACKER_RESOURCES
+#define _AFX_NO_PROPERTY_RESOURCES
+
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_KOR)
+#ifdef _WIN32
+LANGUAGE 18, 1
+#pragma code_page(949)
+#endif //_WIN32
+#include "res\WMCALOADER.rc2"  // non-Microsoft Visual C++ edited resources
+#include "l.kor\afxres.rc"          // Standard components
+#endif
+
+/////////////////////////////////////////////////////////////////////////////
+#endif    // not APSTUDIO_INVOKED
+

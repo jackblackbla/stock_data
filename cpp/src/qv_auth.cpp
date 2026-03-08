@@ -546,6 +546,9 @@ QVAuth::~QVAuth() {
     wmca_free_ = nullptr;
     wmca_connect_ = nullptr;
     wmca_query_ = nullptr;
+    wmca_set_account_pwd_ = nullptr;
+    wmca_set_account_no_pwd_ = nullptr;
+    wmca_set_account_no_by_index_ = nullptr;
     dll_handle_ = nullptr;
 #endif
 }
@@ -841,31 +844,90 @@ bool QVAuth::set_active_account(int account_index, const std::string& account_pa
 
 bool QVAuth::register_account_password(int account_index, const std::string& password) {
 #ifdef _WIN32
-    if (wmca_set_account_pwd_ == nullptr) {
-        logger_.warn("wmcaSetAccountIndexPwd not available — sending plain password");
+    account_index_ = account_index;
+    account_password_ = password;
+
+    char hash_out[44];
+    std::string error_message;
+    if (!fill_account_password_hash(hash_out, sizeof(hash_out), false, error_message)) {
+        if (!error_message.empty()) {
+            logger_.warn("wmcaSetAccountIndexPwd failed: " + error_message);
+        }
         encrypted_password_.clear();
         return false;
     }
-    // Signature: BOOL wmcaSetAccountIndexPwd(char* pszHashOut, int nAccountIndex, const char* pszPassword)
-    // pszHashOut receives the encrypted password (44 bytes)
-    char hash_out[45] = {};
-    const int ret = wmca_set_account_pwd_(hash_out, account_index, password.c_str());
-    const std::size_t len = std::strlen(hash_out);
+    encrypted_password_.assign(hash_out, hash_out + sizeof(hash_out));
     logger_.info(
-        "wmcaSetAccountIndexPwd account_index=" + std::to_string(account_index) +
-        " ret=" + std::to_string(ret) +
-        " encrypted_len=" + std::to_string(len));
-    if (len > 0) {
-        encrypted_password_ = std::string(hash_out, std::min(len, static_cast<std::size_t>(44)));
-    } else {
-        logger_.warn("wmcaSetAccountIndexPwd produced empty hash — will use plain password");
-        encrypted_password_.clear();
-    }
-    return ret != 0;
+        "Cached encrypted account password account_index=" + std::to_string(account_index) +
+        " fixed_len=" + std::to_string(sizeof(hash_out)));
+    return true;
 #else
     (void)account_index;
     (void)password;
     encrypted_password_.clear();
+    return false;
+#endif
+}
+
+bool QVAuth::fill_account_password_hash(char* out,
+                                        std::size_t out_size,
+                                        bool use_account_no,
+                                        std::string& error_message) const {
+#ifdef _WIN32
+    error_message.clear();
+    if (out == nullptr || out_size < 44) {
+        error_message = "password hash output buffer is too small";
+        return false;
+    }
+    if (account_password_.empty()) {
+        error_message = "account password is empty";
+        return false;
+    }
+
+    std::memset(out, ' ', out_size);
+
+    if (use_account_no) {
+        if (account_no_.empty()) {
+            error_message = "account number is empty";
+            return false;
+        }
+        if (wmca_set_account_no_pwd_ == nullptr) {
+            error_message = "wmcaSetAccountNoPwd not available";
+            return false;
+        }
+        const int ret = wmca_set_account_no_pwd_(out, account_no_.c_str(), account_password_.c_str());
+        logger_.info(
+            "wmcaSetAccountNoPwd account_index=" + std::to_string(account_index_) +
+            " account_no=" + account_no_ +
+            " ret=" + std::to_string(ret) +
+            " fixed_len=44");
+        if (ret == 0) {
+            error_message = "wmcaSetAccountNoPwd returned 0";
+            return false;
+        }
+        return true;
+    }
+
+    if (wmca_set_account_pwd_ == nullptr) {
+        error_message = "wmcaSetAccountIndexPwd not available";
+        return false;
+    }
+    const int ret = wmca_set_account_pwd_(out, account_index_, account_password_.c_str());
+    logger_.info(
+        "wmcaSetAccountIndexPwd account_index=" + std::to_string(account_index_) +
+        " account_no=" + account_no_ +
+        " ret=" + std::to_string(ret) +
+        " fixed_len=44");
+    if (ret == 0) {
+        error_message = "wmcaSetAccountIndexPwd returned 0";
+        return false;
+    }
+    return true;
+#else
+    (void)out;
+    (void)out_size;
+    (void)use_account_no;
+    error_message = "not supported on non-Windows";
     return false;
 #endif
 }
@@ -1083,6 +1145,8 @@ bool QVAuth::resolve_symbols() {
         }
     };
     load_optional("wmcaSetAccountIndexPwd", wmca_set_account_pwd_);
+    load_optional("wmcaSetAccountNoPwd", wmca_set_account_no_pwd_);
+    load_optional("wmcaSetAccountNoByIndex", wmca_set_account_no_by_index_);
 
     return true;
 }

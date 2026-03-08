@@ -1,0 +1,14 @@
+.git
+.pytest_cache
+.DS_Store
+cpp/build
+data
+deliverables
+installer
+logs
+python
+SAMPLES
+USER_GUIDE.txt
+*.doc
+*.docx
+*.pdf

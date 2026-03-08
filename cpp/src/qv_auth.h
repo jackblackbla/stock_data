@@ -1,6 +1,7 @@
 #ifndef QV_AUTH_H
 #define QV_AUTH_H
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -43,6 +44,10 @@ public:
     int drain_events_for_tr(int tr_index, int timeout_ms, const std::string& reason) const;
 
     bool register_account_password(int account_index, const std::string& password);
+    bool fill_account_password_hash(char* out,
+                                    std::size_t out_size,
+                                    bool use_account_no,
+                                    std::string& error_message) const;
     std::string get_encrypted_password(int account_index) const;
 
     std::string account_no() const;
@@ -68,6 +73,10 @@ private:
     using WmcaQuery = int(__stdcall*)(void*, int, const char*, const char*, int, int);
     // BOOL __stdcall wmcaSetAccountIndexPwd(const char* pszHashOut, int nAccountIndex, const char* pszPassword)
     using WmcaSetAccountIndexPwd = int(__stdcall*)(char*, int, const char*);
+    // BOOL __stdcall wmcaSetAccountNoPwd(const char* pszHashOut, const char* pszAccountNo, const char* pszPassword)
+    using WmcaSetAccountNoPwd = int(__stdcall*)(char*, const char*, const char*);
+    // BOOL __stdcall wmcaSetAccountNoByIndex(const char* pszHashOut, int nAccountIndex)
+    using WmcaSetAccountNoByIndex = int(__stdcall*)(char*, int);
 
     void* dll_handle_ = nullptr;
     void* hwnd_ = nullptr;
@@ -77,6 +86,8 @@ private:
     WmcaDisconnect wmca_disconnect_ = nullptr;
     WmcaQuery wmca_query_ = nullptr;
     WmcaSetAccountIndexPwd wmca_set_account_pwd_ = nullptr;
+    WmcaSetAccountNoPwd wmca_set_account_no_pwd_ = nullptr;
+    WmcaSetAccountNoByIndex wmca_set_account_no_by_index_ = nullptr;
 
     bool create_message_window();
     void destroy_message_window();

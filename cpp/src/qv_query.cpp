@@ -196,6 +196,60 @@ std::string digits_only(const std::string& raw) {
     return code;
 }
 
+enum class S8180PasswordMode {
+    Encrypted,
+    Plain,
+    Blank,
+};
+
+enum class AccountPasswordHashBinding {
+    Index,
+    AccountNo,
+};
+
+S8180PasswordMode resolve_s8180_password_mode() {
+    const std::string raw = lower_ascii(trim(env_or_default("QV_S8180_PASSWORD_MODE", "encrypted")));
+    if (raw == "plain") {
+        return S8180PasswordMode::Plain;
+    }
+    if (raw == "blank" || raw == "empty" || raw == "spaces") {
+        return S8180PasswordMode::Blank;
+    }
+    return S8180PasswordMode::Encrypted;
+}
+
+const char* s8180_password_mode_name(S8180PasswordMode mode) {
+    switch (mode) {
+        case S8180PasswordMode::Encrypted:
+            return "encrypted";
+        case S8180PasswordMode::Plain:
+            return "plain";
+        case S8180PasswordMode::Blank:
+            return "blank";
+        default:
+            return "unknown";
+    }
+}
+
+AccountPasswordHashBinding resolve_account_password_hash_binding() {
+    const std::string raw = lower_ascii(trim(env_or_default("QV_ACCOUNT_PASSWORD_HASH_BINDING", "index")));
+    if (raw == "account_no" || raw == "account-no" || raw == "accountno") {
+        return AccountPasswordHashBinding::AccountNo;
+    }
+    return AccountPasswordHashBinding::Index;
+}
+
+const char* account_password_hash_binding_name(AccountPasswordHashBinding binding) {
+    switch (binding) {
+        case AccountPasswordHashBinding::Index:
+            return "index";
+        case AccountPasswordHashBinding::AccountNo:
+            return "account_no";
+        default:
+            return "unknown";
+    }
+}
+
 bool is_retryable_failure(int attempt, int max_attempts) {
     return attempt + 1 < max_attempts;
 }
@@ -536,16 +590,48 @@ bool QVQuery::fetch_s8180_page(const std::string& trade_date,
     const int tr_index = next_exec_tr_index_++;
     auth_.discard_stale_query_events("before s8180 tr_index=" + std::to_string(tr_index));
 
-    Ts8180InBlock input{};
+    Ts8180InBlock input;
+    std::memset(&input, 0x20, sizeof(input));
     set_fixed_field(input.inq_gubunz1, env_or_default("QV_INQ_GUBUN", "3"));
-    const std::string encrypted_password = auth_.get_encrypted_password(auth_.account_index());
+    const auto password_mode = resolve_s8180_password_mode();
+    const auto hash_binding = resolve_account_password_hash_binding();
+    std::size_t password_len = 0;
+    if (password_mode == S8180PasswordMode::Encrypted) {
+        std::string hash_error;
+        if (!auth_.fill_account_password_hash(
+                input.pswd_noz44,
+                sizeof(input.pswd_noz44),
+                hash_binding == AccountPasswordHashBinding::AccountNo,
+                hash_error)) {
+            logger_.error("s8180 account password hash fill failed: " + hash_error);
+            fatal_error = true;
+            page_error = "계좌 비밀번호 해시 생성 실패";
+            return false;
+        }
+        password_len = sizeof(input.pswd_noz44);
+    } else if (password_mode == S8180PasswordMode::Plain) {
+        password_len = auth_.account_password().size();
+        set_fixed_field(input.pswd_noz44, auth_.account_password());
+    } else {
+        set_fixed_field(input.pswd_noz44, "");
+    }
+    logger_.info(
+        "s8180 password mode=" + std::string(s8180_password_mode_name(password_mode)) +
+        " hash_binding=" + std::string(
+            password_mode == S8180PasswordMode::Encrypted
+                ? account_password_hash_binding_name(hash_binding)
+                : "n/a") +
+        " account_index=" + std::to_string(auth_.account_index()) +
+        " account_no=" + auth_.account_no() +
+        " source_len=" + std::to_string(password_len));
     logger_.info(
         "s8180 password account_index=" + std::to_string(auth_.account_index()) +
         " account_no=" + auth_.account_no() +
-        " encrypted_len=" + std::to_string(encrypted_password.size()));
-    std::memset(input.pswd_noz44, '\0', sizeof(input.pswd_noz44));
-    std::memcpy(input.pswd_noz44, encrypted_password.data(),
-                std::min(encrypted_password.size(), sizeof(input.pswd_noz44)));
+        " hash_binding=" + std::string(
+            password_mode == S8180PasswordMode::Encrypted
+                ? account_password_hash_binding_name(hash_binding)
+                : "n/a") +
+        " encrypted_len=" + std::to_string(password_mode == S8180PasswordMode::Encrypted ? password_len : 0));
     set_fixed_field(input.group_noz4, env_or_default("QV_GROUP_NO", "0000"));
     set_fixed_field(input.mkt_slctz1, env_or_default("QV_MKT_SLCT", "0"));
     set_fixed_field(input.order_datez8, trade_date);
